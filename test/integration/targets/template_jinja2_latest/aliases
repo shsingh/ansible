@@ -1,2 +1,6 @@
 needs/root
+<<<<<<< HEAD
 posix/ci/group2
+=======
+shippable/posix/group2
+>>>>>>> bd072fe83a932598d5d86f9548d8f2ba0ec07371

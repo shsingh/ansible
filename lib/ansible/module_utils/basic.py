@@ -62,11 +62,13 @@ PASS_BOOLS = ('no_log', 'debug', 'diff')
 # The functions available here can be used to do many common tasks,
 # to simplify development of Python modules.
 
+import __main__
 import atexit
 import locale
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import types
@@ -81,6 +83,7 @@ import pwd
 import platform
 import errno
 import datetime
+from collections import deque
 from itertools import chain, repeat
 
 try:
@@ -108,26 +111,14 @@ NoneType = type(None)
 try:
     import json
     # Detect the python-json library which is incompatible
-    # Look for simplejson if that's the case
     try:
         if not isinstance(json.loads, types.FunctionType) or not isinstance(json.dumps, types.FunctionType):
             raise ImportError
     except AttributeError:
         raise ImportError
 except ImportError:
-    try:
-        import simplejson as json
-    except ImportError:
-        print('\n{"msg": "Error: ansible requires the stdlib json or simplejson module, neither was found!", "failed": true}')
-        sys.exit(1)
-    except SyntaxError:
-        print('\n{"msg": "SyntaxError: probably due to installed simplejson being for a different python version", "failed": true}')
-        sys.exit(1)
-    else:
-        sj_version = json.__version__.split('.')
-        if sj_version < ['1', '6']:
-            # Version 1.5 released 2007-01-18 does not have the encoding parameter which we need
-            print('\n{"msg": "Error: Ansible requires the stdlib json or simplejson >= 1.6.  Neither was found!", "failed": true}')
+    print('\n{"msg": "Error: ansible requires the stdlib json and was not found!", "failed": true}')
+    sys.exit(1)
 
 AVAILABLE_HASH_ALGORITHMS = dict()
 try:
@@ -143,21 +134,42 @@ try:
         algorithms = ('md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512')
     for algorithm in algorithms:
         AVAILABLE_HASH_ALGORITHMS[algorithm] = getattr(hashlib, algorithm)
-except ImportError:
+
+    # we may have been able to import md5 but it could still not be available
+    try:
+        hashlib.md5()
+    except ValueError:
+        algorithms.pop('md5', None)
+except Exception:
     import sha
     AVAILABLE_HASH_ALGORITHMS = {'sha1': sha.sha}
     try:
         import md5
         AVAILABLE_HASH_ALGORITHMS['md5'] = md5.md5
-    except ImportError:
+    except Exception:
         pass
 
 from ansible.module_utils.common._collections_compat import (
-    deque,
     KeysView,
     Mapping, MutableMapping,
     Sequence, MutableSequence,
     Set, MutableSet,
+)
+from ansible.module_utils.common.process import get_bin_path
+from ansible.module_utils.common.file import (
+    _PERM_BITS as PERM_BITS,
+    _EXEC_PERM_BITS as EXEC_PERM_BITS,
+    _DEFAULT_PERM as DEFAULT_PERM,
+    is_executable,
+    format_attributes,
+    get_flags_from_attributes,
+)
+from ansible.module_utils.common.sys_info import (
+    get_platform,
+    get_distribution,
+    get_distribution_version,
+    load_platform_subclass,
+    get_all_subclasses,
 )
 from ansible.module_utils.pycompat24 import get_exception, literal_eval
 from ansible.module_utils.six import (
@@ -172,7 +184,7 @@ from ansible.module_utils.six import (
 )
 from ansible.module_utils.six.moves import map, reduce, shlex_quote
 from ansible.module_utils._text import to_native, to_bytes, to_text
-from ansible.module_utils.parsing.convert_bool import BOOLEANS_FALSE, BOOLEANS_TRUE, boolean
+from ansible.module_utils.parsing.convert_bool import BOOLEANS, BOOLEANS_FALSE, BOOLEANS_TRUE, boolean
 
 
 # Note: When getting Sequence from collections, it matches with strings.  If
@@ -251,11 +263,6 @@ MODE_OPERATOR_RE = re.compile(r'[+=-]')
 USERS_RE = re.compile(r'[^ugo]')
 PERMS_RE = re.compile(r'[^rwxXstugo]')
 
-
-PERM_BITS = 0o7777       # file mode permission bits
-EXEC_PERM_BITS = 0o0111  # execute permission bits
-DEFAULT_PERM = 0o0666    # default file permission bits
-
 # Used for determining if the system is running a new enough python version
 # and should only restrict on our documented minimum versions
 _PY3_MIN = sys.version_info[:2] >= (3, 5)
@@ -267,91 +274,6 @@ if not _PY_MIN:
         '"msg": "Ansible requires a minimum of Python2 version 2.6 or Python3 version 3.5. Current version: %s"}' % ''.join(sys.version.splitlines())
     )
     sys.exit(1)
-
-
-def get_platform():
-    ''' what's the platform?  example: Linux is a platform. '''
-    return platform.system()
-
-
-def get_distribution():
-    ''' return the distribution name '''
-    if platform.system() == 'Linux':
-        try:
-            supported_dists = platform._supported_dists + ('arch', 'alpine', 'devuan')
-            distribution = platform.linux_distribution(supported_dists=supported_dists)[0].capitalize()
-            if not distribution and os.path.isfile('/etc/system-release'):
-                distribution = platform.linux_distribution(supported_dists=['system'])[0].capitalize()
-                if 'Amazon' in distribution:
-                    distribution = 'Amazon'
-                else:
-                    distribution = 'OtherLinux'
-        except:
-            # FIXME: MethodMissing, I assume?
-            distribution = platform.dist()[0].capitalize()
-    else:
-        distribution = None
-    return distribution
-
-
-def get_distribution_version():
-    ''' return the distribution version '''
-    if platform.system() == 'Linux':
-        try:
-            distribution_version = platform.linux_distribution()[1]
-            if not distribution_version and os.path.isfile('/etc/system-release'):
-                distribution_version = platform.linux_distribution(supported_dists=['system'])[1]
-        except:
-            # FIXME: MethodMissing, I assume?
-            distribution_version = platform.dist()[1]
-    else:
-        distribution_version = None
-    return distribution_version
-
-
-def get_all_subclasses(cls):
-    '''
-    used by modules like Hardware or Network fact classes to retrieve all subclasses of a given class.
-    __subclasses__ return only direct sub classes. This one go down into the class tree.
-    '''
-    # Retrieve direct subclasses
-    subclasses = cls.__subclasses__()
-    to_visit = list(subclasses)
-    # Then visit all subclasses
-    while to_visit:
-        for sc in to_visit:
-            # The current class is now visited, so remove it from list
-            to_visit.remove(sc)
-            # Appending all subclasses to visit and keep a reference of available class
-            for ssc in sc.__subclasses__():
-                subclasses.append(ssc)
-                to_visit.append(ssc)
-    return subclasses
-
-
-def load_platform_subclass(cls, *args, **kwargs):
-    '''
-    used by modules like User to have different implementations based on detected platform.  See User
-    module for an example.
-    '''
-
-    this_platform = get_platform()
-    distribution = get_distribution()
-    subclass = None
-
-    # get the most specific superclass for this platform
-    if distribution is not None:
-        for sc in get_all_subclasses(cls):
-            if sc.distribution is not None and sc.distribution == distribution and sc.platform == this_platform:
-                subclass = sc
-    if subclass is None:
-        for sc in get_all_subclasses(cls):
-            if sc.platform == this_platform and sc.distribution is None:
-                subclass = sc
-    if subclass is None:
-        subclass = cls
-
-    return super(cls, subclass).__new__(subclass)
 
 
 def json_dict_unicode_to_bytes(d, encoding='utf-8', errors='surrogate_or_strict'):
@@ -623,16 +545,15 @@ def bytes_to_human(size, isbits=False, unit=None):
 def human_to_bytes(number, default_unit=None, isbits=False):
 
     '''
-    Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument
-    ex:
-      human_to_bytes('10M') <=> human_to_bytes(10, 'M')
+    Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument.
+    example: human_to_bytes('10M') <=> human_to_bytes(10, 'M')
     '''
     m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
     if m is None:
         raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
     try:
         num = float(m.group(1))
-    except:
+    except Exception:
         raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
 
     unit = m.group(2)
@@ -645,7 +566,7 @@ def human_to_bytes(number, default_unit=None, isbits=False):
     range_key = unit[0].upper()
     try:
         limit = SIZE_RANGES[range_key]
-    except:
+    except Exception:
         raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number, unit, ", ".join(SIZE_RANGES.keys())))
 
     # default value
@@ -667,20 +588,6 @@ def human_to_bytes(number, default_unit=None, isbits=False):
             raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
 
     return int(round(num * limit))
-
-
-def is_executable(path):
-    '''is the given path executable?
-
-    Limitations:
-    * Does not account for FSACLs.
-    * Most times we really want to know "Can the current user execute this
-      file"  This function does not tell us that, only if an execute bit is set.
-    '''
-    # These are all bitfields so first bitwise-or all the permissions we're
-    # looking for, then bitwise-and with the file's mode to determine if any
-    # execute bits are set.
-    return ((stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) & os.stat(path)[stat.ST_MODE])
 
 
 def _load_params():
@@ -761,22 +668,6 @@ def _lenient_lowercase(lst):
     return lowered
 
 
-def format_attributes(attributes):
-    attribute_list = []
-    for attr in attributes:
-        if attr in FILE_ATTRIBUTES:
-            attribute_list.append(FILE_ATTRIBUTES[attr])
-    return attribute_list
-
-
-def get_flags_from_attributes(attributes):
-    flags = []
-    for key, attr in FILE_ATTRIBUTES.items():
-        if attr in attributes:
-            flags.append(key)
-    return ''.join(flags)
-
-
 def _json_encode_fallback(obj):
     if isinstance(obj, Set):
         return list(obj)
@@ -801,6 +692,12 @@ def jsonify(data, **kwargs):
     raise UnicodeError('Invalid unicode encoding encountered')
 
 
+def missing_required_lib(library):
+    hostname = platform.node()
+    return "Failed to import the required Python library (%s) on %s's Python %s. Please read module documentation " \
+           "and install in the appropriate location." % (library, hostname, sys.executable)
+
+
 class AnsibleFallbackNotFound(Exception):
     pass
 
@@ -812,9 +709,11 @@ class AnsibleModule(object):
                  required_if=None):
 
         '''
-        common code for quickly building an ansible module in Python
-        (although you can write modules in anything that can return JSON)
-        see library/* for examples
+        Common code for quickly building an ansible module in Python
+        (although you can write modules with anything that can return JSON).
+
+        See :ref:`developing_modules_general` for a general introduction
+        and :ref:`developing_program_flow_modules` for more detailed explanation.
         '''
 
         self._name = os.path.basename(__file__)  # initialize name until we can parse from options
@@ -930,20 +829,35 @@ class AnsibleModule(object):
 
     @property
     def tmpdir(self):
-        # if _ansible_tmpdir was not set, the module needs to create it and
-        # clean it up once finished.
+        # if _ansible_tmpdir was not set and we have a remote_tmp,
+        # the module needs to create it and clean it up once finished.
+        # otherwise we create our own module tmp dir from the system defaults
         if self._tmpdir is None:
+            basedir = None
+
             basedir = os.path.expanduser(os.path.expandvars(self._remote_tmp))
             if not os.path.exists(basedir):
-                self.warn("Module remote_tmp %s did not exist and was created "
-                          "with a mode of 0700, this may cause issues when "
-                          "running as another user. To avoid this, create the "
-                          "remote_tmp dir with the correct permissions "
-                          "manually" % basedir)
-                os.makedirs(basedir, mode=0o700)
+                try:
+                    os.makedirs(basedir, mode=0o700)
+                except (OSError, IOError) as e:
+                    self.warn("Unable to use %s as temporary directory, "
+                              "failing back to system: %s" % (basedir, to_native(e)))
+                    basedir = None
+                else:
+                    self.warn("Module remote_tmp %s did not exist and was "
+                              "created with a mode of 0700, this may cause"
+                              " issues when running as another user. To "
+                              "avoid this, create the remote_tmp dir with "
+                              "the correct permissions manually" % basedir)
 
             basefile = "ansible-moduletmp-%s-" % time.time()
-            tmpdir = tempfile.mkdtemp(prefix=basefile, dir=basedir)
+            try:
+                tmpdir = tempfile.mkdtemp(prefix=basefile, dir=basedir)
+            except (OSError, IOError) as e:
+                self.fail_json(
+                    msg="Failed to create remote module tmp path at dir %s "
+                        "with prefix %s: %s" % (basedir, basefile, to_native(e))
+                )
             if not self._keep_remote_files:
                 atexit.register(shutil.rmtree, tmpdir)
             self._tmpdir = tmpdir
@@ -1114,7 +1028,7 @@ class AnsibleModule(object):
             f = open('/proc/mounts', 'r')
             mount_data = f.readlines()
             f.close()
-        except:
+        except Exception:
             return (False, None)
         path_mount_point = self.find_mount_point(path)
         for line in mount_data:
@@ -1396,7 +1310,7 @@ class AnsibleModule(object):
                     output['attr_flags'] = res[1].replace('-', '').strip()
                     output['version'] = res[0].strip()
                     output['attributes'] = format_attributes(output['attr_flags'])
-            except:
+            except Exception:
                 pass
         return output
 
@@ -1906,7 +1820,7 @@ class AnsibleModule(object):
             if value.startswith("{"):
                 try:
                     return json.loads(value)
-                except:
+                except Exception:
                     (result, exc) = self.safe_eval(value, dict(), include_exceptions=True)
                     if exc is not None:
                         raise TypeError('unable to evaluate string as dictionary')
@@ -2249,7 +2163,7 @@ class AnsibleModule(object):
             if not os.access(cwd, os.F_OK | os.R_OK):
                 raise Exception()
             return cwd
-        except:
+        except Exception:
             # we don't have access to the cwd, probably because of sudo.
             # Try and move to a neutral location to prevent errors
             for cwd in [self.tmpdir, os.path.expandvars('$HOME'), tempfile.gettempdir()]:
@@ -2257,7 +2171,7 @@ class AnsibleModule(object):
                     if os.access(cwd, os.F_OK | os.R_OK):
                         os.chdir(cwd)
                         return cwd
-                except:
+                except Exception:
                     pass
         # we won't error here, as it may *not* be a problem,
         # and we don't want to break modules unnecessarily
@@ -2265,38 +2179,24 @@ class AnsibleModule(object):
 
     def get_bin_path(self, arg, required=False, opt_dirs=None):
         '''
-        find system executable in PATH.
-        Optional arguments:
-           - required:  if executable is not found and required is true, fail_json
-           - opt_dirs:  optional list of directories to search in addition to PATH
-        if found return full path; otherwise return None
-        '''
-        opt_dirs = [] if opt_dirs is None else opt_dirs
+        Find system executable in PATH.
 
-        sbin_paths = ['/sbin', '/usr/sbin', '/usr/local/sbin']
-        paths = []
-        for d in opt_dirs:
-            if d is not None and os.path.exists(d):
-                paths.append(d)
-        paths += os.environ.get('PATH', '').split(os.pathsep)
+        :param arg: The executable to find.
+        :param required: if executable is not found and required is ``True``, fail_json
+        :param opt_dirs: optional list of directories to search in addition to ``PATH``
+        :returns: if found return full path; otherwise return None
+        '''
+
         bin_path = None
-        # mangle PATH to include /sbin dirs
-        for p in sbin_paths:
-            if p not in paths and os.path.exists(p):
-                paths.append(p)
-        for d in paths:
-            if not d:
-                continue
-            path = os.path.join(d, arg)
-            if os.path.exists(path) and not os.path.isdir(path) and is_executable(path):
-                bin_path = path
-                break
-        if required and bin_path is None:
-            self.fail_json(msg='Failed to find required executable %s in paths: %s' % (arg, os.pathsep.join(paths)))
+        try:
+            bin_path = get_bin_path(arg, required, opt_dirs)
+        except ValueError as e:
+            self.fail_json(msg=to_text(e))
+
         return bin_path
 
     def boolean(self, arg):
-        ''' return a bool for the arg '''
+        '''Convert the argument to a boolean'''
         if arg is None:
             return arg
 
@@ -2344,6 +2244,8 @@ class AnsibleModule(object):
                 for d in kwargs['deprecations']:
                     if isinstance(d, SEQUENCETYPE) and len(d) == 2:
                         self.deprecate(d[0], version=d[1])
+                    elif isinstance(d, Mapping):
+                        self.deprecate(d['msg'], version=d.get('version', None))
                     else:
                         self.deprecate(d)
             else:
@@ -2369,10 +2271,15 @@ class AnsibleModule(object):
             raise AssertionError("implementation error -- msg to explain the error is required")
         kwargs['failed'] = True
 
-        # add traceback if debug or high verbosity and it is missing
-        # Note: badly named as exception, it is really always been 'traceback'
+        # Add traceback if debug or high verbosity and it is missing
+        # NOTE: Badly named as exception, it really always has been a traceback
         if 'exception' not in kwargs and sys.exc_info()[2] and (self._debug or self._verbosity >= 3):
-            kwargs['exception'] = ''.join(traceback.format_tb(sys.exc_info()[2]))
+            if PY2:
+                # On Python 2 this is the last (stack frame) exception and as such may be unrelated to the failure
+                kwargs['exception'] = 'WARNING: The below traceback may *not* be related to the actual failure.\n' +\
+                                      ''.join(traceback.format_tb(sys.exc_info()[2]))
+            else:
+                kwargs['exception'] = ''.join(traceback.format_tb(sys.exc_info()[2]))
 
         self.do_cleanup_files()
         self._return_formatted(kwargs)
@@ -2603,7 +2510,8 @@ class AnsibleModule(object):
                                 if unsafe_writes and e.errno == errno.EBUSY:
                                     self._unsafe_writes(b_tmp_dest_name, b_dest)
                                 else:
-                                    self.fail_json(msg='Unable to rename file: %s to %s: %s' % (src, dest, to_native(e)),
+                                    self.fail_json(msg='Unable to make %s into to %s, failed final rename from %s: %s' %
+                                                       (src, dest, b_tmp_dest_name, to_native(e)),
                                                    exception=traceback.format_exc())
                         except (shutil.Error, OSError, IOError) as e:
                             self.fail_json(msg='Failed to replace file: %s to %s: %s' % (src, dest, to_native(e)),
@@ -2690,8 +2598,14 @@ class AnsibleModule(object):
 
         return self._clean
 
+    def _restore_signal_handlers(self):
+        # Reset SIGPIPE to SIG_DFL, otherwise in Python2.7 it gets ignored in subprocesses.
+        if PY2 and sys.platform != 'win32':
+            signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
     def run_command(self, args, check_rc=False, close_fds=True, executable=None, data=None, binary_data=False, path_prefix=None, cwd=None,
-                    use_unsafe_shell=False, prompt_regex=None, environ_update=None, umask=None, encoding='utf-8', errors='surrogate_or_strict'):
+                    use_unsafe_shell=False, prompt_regex=None, environ_update=None, umask=None, encoding='utf-8', errors='surrogate_or_strict',
+                    expand_user_and_vars=True, pass_fds=None, before_communicate_callback=None):
         '''
         Execute a command, returns rc, stdout, and stderr.
 
@@ -2706,7 +2620,7 @@ class AnsibleModule(object):
         :kw data: If given, information to write to the stdin of the command
         :kw binary_data: If False, append a newline to the data.  Default False
         :kw path_prefix: If given, additional path to find the command in.
-            This adds to the PATH environment vairable so helper commands in
+            This adds to the PATH environment variable so helper commands in
             the same directory can also be found
         :kw cwd: If given, working directory to run the command inside
         :kw use_unsafe_shell: See `args` parameter.  Default False
@@ -2729,6 +2643,18 @@ class AnsibleModule(object):
             python3 versions we support) otherwise a UnicodeError traceback
             will be raised.  This does not affect transformations of strings
             given as args.
+        :kw expand_user_and_vars: When ``use_unsafe_shell=False`` this argument
+            dictates whether ``~`` is expanded in paths and environment variables
+            are expanded before running the command. When ``True`` a string such as
+            ``$SHELL`` will be expanded regardless of escaping. When ``False`` and
+            ``use_unsafe_shell=False`` no path or variable expansion will be done.
+        :kw pass_fds: When running on python3 this argument
+            dictates which file descriptors should be passed
+            to an underlying ``Popen`` constructor.
+        :kw before_communicate_callback: This function will be called
+            after ``Popen`` object will be created
+            but before communicating to the process.
+            (``Popen`` object will be passed to callback as a first argument)
         :returns: A 3-tuple of return code (integer), stdout (native string),
             and stderr (native string).  On python2, stdout and stderr are both
             byte strings.  On python3, stdout and stderr are text strings converted
@@ -2767,8 +2693,11 @@ class AnsibleModule(object):
                     args = to_text(args, errors='surrogateescape')
                 args = shlex.split(args)
 
-            # expand shellisms
-            args = [os.path.expanduser(os.path.expandvars(x)) for x in args if x is not None]
+            # expand ``~`` in paths, and all environment vars
+            if expand_user_and_vars:
+                args = [os.path.expanduser(os.path.expandvars(x)) for x in args if x is not None]
+            else:
+                args = [x for x in args if x is not None]
 
         prompt_re = None
         if prompt_regex:
@@ -2825,7 +2754,10 @@ class AnsibleModule(object):
             stdin=st_in,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            preexec_fn=self._restore_signal_handlers,
         )
+        if PY3 and pass_fds:
+            kwargs["pass_fds"] = pass_fds
 
         # store the pwd
         prev_dir = os.getcwd()
@@ -2848,6 +2780,8 @@ class AnsibleModule(object):
             if self._debug:
                 self.log('Executing: ' + self._clean_args(args))
             cmd = subprocess.Popen(args, **kwargs)
+            if before_communicate_callback:
+                before_communicate_callback(cmd)
 
             # the communication logic here is essentially taken from that
             # of the _communicate() function in ssh.py

@@ -288,14 +288,16 @@ from ansible.module_utils.six.moves import shlex_quote
 from ansible.module_utils._text import to_bytes, to_native, to_text
 from ansible.module_utils.parsing.convert_bool import BOOLEANS, boolean
 from ansible.plugins.connection import ConnectionBase, BUFSIZE
+from ansible.utils.display import Display
 from ansible.utils.path import unfrackpath, makedirs_safe
 
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-    display = Display()
+display = Display()
 
+
+b_NOT_SSH_ERRORS = (b'Traceback (most recent call last):',  # Python-2.6 when there's an exception
+                                                            # while invoking a script via -m
+                    b'PHP Parse error:',  # Php always returns error 255
+                    )
 
 SSHPASS_AVAILABLE = None
 
@@ -330,11 +332,14 @@ def _ssh_retry(func):
             try:
                 try:
                     return_tuple = func(self, *args, **kwargs)
-                    display.vvv(return_tuple, host=self.host)
+                    if self._play_context.no_log:
+                        display.vvv('rc=%s, stdout & stderr censored due to no log' % return_tuple[0], host=self.host)
+                    else:
+                        display.vvv(return_tuple, host=self.host)
                     # 0 = success
                     # 1-254 = remote command return code
-                    # 255 = failure from the ssh command itself
-                except (AnsibleControlPersistBrokenPipeError) as e:
+                    # 255 could be a failure from the ssh command itself
+                except (AnsibleControlPersistBrokenPipeError):
                     # Retry one more time because of the ControlPersist broken pipe (see #16731)
                     cmd = args[0]
                     if self._play_context.password and isinstance(cmd, list):
@@ -344,10 +349,23 @@ def _ssh_retry(func):
                     display.vvv(u"RETRYING BECAUSE OF CONTROLPERSIST BROKEN PIPE")
                     return_tuple = func(self, *args, **kwargs)
 
-                if return_tuple[0] != 255:
-                    break
-                else:
-                    raise AnsibleConnectionFailure("Failed to connect to the host via ssh: %s" % to_native(return_tuple[2]))
+                if return_tuple[0] == 255:
+                    SSH_ERROR = True
+                    for signature in b_NOT_SSH_ERRORS:
+                        if signature in return_tuple[1]:
+                            SSH_ERROR = False
+                            break
+
+                    if SSH_ERROR:
+                        msg = "Failed to connect to the host via ssh: "
+                        if self._play_context.no_log:
+                            msg += '<error censored due to no log>'
+                        else:
+                            msg += to_native(return_tuple[2])
+                        raise AnsibleConnectionFailure(msg)
+
+                break
+
             except (AnsibleConnectionFailure, Exception) as e:
                 if attempt == remaining_tries - 1:
                     raise
@@ -1010,13 +1028,16 @@ class Connection(ConnectionBase):
                     # we pass sudoable=False to disable pty allocation, which
                     # would end up mixing stdout/stderr and screwing with newlines
                     (returncode, stdout, stderr) = self.exec_command('dd if=%s bs=%s' % (in_path, BUFSIZE), sudoable=False)
-                    out_file = open(to_bytes(out_path, errors='surrogate_or_strict'), 'wb+')
-                    out_file.write(stdout)
-                    out_file.close()
+                    with open(to_bytes(out_path, errors='surrogate_or_strict'), 'wb+') as out_file:
+                        out_file.write(stdout)
                 else:
-                    in_data = open(to_bytes(in_path, errors='surrogate_or_strict'), 'rb').read()
-                    in_data = to_bytes(in_data, nonstring='passthru')
-                    (returncode, stdout, stderr) = self.exec_command('dd of=%s bs=%s' % (out_path, BUFSIZE), in_data=in_data, sudoable=False)
+                    with open(to_bytes(in_path, errors='surrogate_or_strict'), 'rb') as f:
+                        in_data = to_bytes(f.read(), nonstring='passthru')
+                    if not in_data:
+                        count = ' count=0'
+                    else:
+                        count = ''
+                    (returncode, stdout, stderr) = self.exec_command('dd of=%s bs=%s%s' % (out_path, BUFSIZE, count), in_data=in_data, sudoable=False)
 
             # Check the return code and rollover to next method if failed
             if returncode == 0:
@@ -1088,13 +1109,25 @@ class Connection(ConnectionBase):
         # If we have a persistent ssh connection (ControlPersist), we can ask it to stop listening.
         cmd = self._build_command(self._play_context.ssh_executable, '-O', 'stop', self.host)
         controlpersist, controlpath = self._persistence_controls(cmd)
-        if controlpersist:
+        cp_arg = [a for a in cmd if a.startswith(b"ControlPath=")]
+
+        # only run the reset if the ControlPath already exists or if it isn't
+        # configured and ControlPersist is set
+        run_reset = False
+        if controlpersist and len(cp_arg) > 0:
+            cp_path = cp_arg[0].split(b"=", 1)[-1]
+            if os.path.exists(cp_path):
+                run_reset = True
+        elif controlpersist:
+            run_reset = True
+
+        if run_reset:
             display.vvv(u'sending stop: %s' % cmd)
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = p.communicate()
             status_code = p.wait()
             if status_code != 0:
-                raise AnsibleError("Cannot reset connection:\n%s" % stderr)
+                display.warning("Failed to reset connection:%s" % stderr)
 
         self.close()
 

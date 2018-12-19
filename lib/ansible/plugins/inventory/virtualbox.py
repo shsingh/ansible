@@ -10,12 +10,16 @@ DOCUMENTATION = '''
     short_description: virtualbox inventory source
     description:
         - Get inventory hosts from the local virtualbox installation.
-        - Uses a <name>.vbox.yaml (or .vbox.yml) YAML configuration file.
+        - Uses a YAML configuration file that ends with virtualbox.(yml|yaml) or vbox.(yml|yaml).
         - The inventory_hostname is always the 'Name' of the virtualbox instance.
     extends_documentation_fragment:
       - constructed
       - inventory_cache
     options:
+        plugin:
+            description: token that ensures this is a source file for the 'virtualbox' plugin
+            required: True
+            choices: ['virtualbox']
         running_only:
             description: toggles showing all vms vs only those currently running
             type: boolean
@@ -44,11 +48,11 @@ simple_config_file:
 
 import os
 
-from collections import MutableMapping
 from subprocess import Popen, PIPE
 
 from ansible.errors import AnsibleParserError
 from ansible.module_utils._text import to_bytes, to_native, to_text
+from ansible.module_utils.common._collections_compat import MutableMapping
 from ansible.plugins.inventory import BaseInventoryPlugin, Constructable, Cacheable
 
 
@@ -67,7 +71,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             if 'Value' in ipinfo:
                 a, ip = ipinfo.split(':', 1)
                 ret = ip.strip()
-        except:
+        except Exception:
             pass
         return ret
 
@@ -133,7 +137,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 continue
             try:
                 k, v = line.split(':', 1)
-            except:
+            except Exception:
                 # skip non splitable
                 continue
 
@@ -206,7 +210,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         valid = False
         if super(InventoryModule, self).verify_file(path):
-            if path.endswith(('.vbox.yaml', '.vbox.yml')):
+            if path.endswith(('virtualbox.yaml', 'virtualbox.yml', 'vbox.yaml', 'vbox.yml')):
                 valid = True
         return valid
 
@@ -233,7 +237,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 update_cache = True
 
         if not source_data:
-            b_pwfile = to_bytes(self.get_option('settings_password_file'), errors='surrogate_or_strict')
+            b_pwfile = to_bytes(self.get_option('settings_password_file'), errors='surrogate_or_strict', nonstring='passthru')
             running = self.get_option('running_only')
 
             # start getting data

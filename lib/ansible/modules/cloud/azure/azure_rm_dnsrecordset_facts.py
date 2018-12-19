@@ -45,7 +45,7 @@ extends_documentation_fragment:
     - azure_tags
 
 author:
-    - "Ozi Boms @ozboms"
+    - "Ozi Boms (@ozboms)"
 
 '''
 
@@ -98,7 +98,7 @@ from ansible.module_utils.azure_rm_common import AzureRMModuleBase
 try:
     from msrestazure.azure_exceptions import CloudError
     from azure.common import AzureMissingResourceHttpError, AzureHttpError
-except:
+except Exception:
     # This is handled in azure_rm_common
     pass
 
@@ -196,6 +196,7 @@ class AzureRMRecordSetFacts(AzureRMModuleBase):
 
 def main():
     AzureRMRecordSetFacts()
+
 
 if __name__ == '__main__':
     main()

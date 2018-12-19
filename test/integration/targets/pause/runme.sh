@@ -15,9 +15,14 @@ ansible-playbook test-pause-no-tty.yml -i ../../inventory 2>&1 | \
     }
 EOF
 
+# Test redirecting stdout
+# Issue #41717
+ansible-playbook pause-3.yml -i ../../inventory > /dev/null \
+    && echo "Successfully redirected stdout" \
+    || echo "Failure when attempting to redirect stdout"
+
 # Test pause with seconds and minutes specified
 ansible-playbook test-pause.yml -i ../../inventory "$@"
 
 # Interactively test pause
-pip install pexpect
 python test-pause.py -i ../../inventory "$@"

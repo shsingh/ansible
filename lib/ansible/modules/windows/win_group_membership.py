@@ -30,11 +30,16 @@ options:
       - Accepts all local, domain and service user types as username,
         favoring domain lookups when in a domain.
     required: yes
+    type: list
   state:
     description:
       - Desired state of the members in the group.
     choices: [ absent, present ]
     default: present
+seealso:
+- module: win_domain_group
+- module: win_domain_membership
+- module: win_group
 author:
     - Andrew Saraceni (@andrewsaraceni)
 '''
@@ -61,7 +66,7 @@ RETURN = r'''
 name:
     description: The name of the target local group.
     returned: always
-    type: string
+    type: str
     sample: Administrators
 added:
     description: A list of members added when C(state) is C(present); this is

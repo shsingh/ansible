@@ -58,7 +58,7 @@ RETURN = '''
 status:
     description: success status
     returned: success
-    type: string
+    type: str
     sample: "okey dokey"
 '''
 
@@ -116,6 +116,7 @@ def main():
     )
 
     module.exit_json(changed=True, msg="okey dokey")
+
 
 if __name__ == '__main__':
     main()

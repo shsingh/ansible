@@ -61,7 +61,7 @@ RETURN = '''
 ---
 version:
   description: version of the installed / removed plugin.
-  type: string
+  type: str
   returned: allways
 '''
 
@@ -225,6 +225,7 @@ def main():
         **result
     )
     return
+
 
 if __name__ == '__main__':
     main()

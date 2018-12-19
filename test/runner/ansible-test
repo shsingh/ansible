@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # PYTHON_ARGCOMPLETE_OK
+<<<<<<< HEAD
 """Test runner for all Ansible tests."""
 
 from __future__ import absolute_import, print_function
@@ -584,3 +585,11 @@ def complete_sanity_test(prefix, parsed_args, **_):
 
 if __name__ == '__main__':
     main()
+=======
+"""Legacy entry point for ansible-test. The preferred version is in the bin directory."""
+
+import lib.cli
+
+if __name__ == '__main__':
+    lib.cli.main()
+>>>>>>> bd072fe83a932598d5d86f9548d8f2ba0ec07371

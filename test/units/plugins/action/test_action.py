@@ -24,8 +24,8 @@ import os
 import re
 
 from ansible import constants as C
-from ansible.compat.tests import unittest
-from ansible.compat.tests.mock import patch, MagicMock, mock_open
+from units.compat import unittest
+from units.compat.mock import patch, MagicMock, mock_open
 
 from ansible.errors import AnsibleError
 from ansible.module_utils.six import text_type
@@ -415,7 +415,7 @@ class TestActionBase(unittest.TestCase):
             return " ".join(to_run)
 
         def get_option(option):
-            return {}.get(option)
+            return {'admin_users': ['root', 'toor']}.get(option)
 
         mock_connection = MagicMock()
         mock_connection.build_module_command.side_effect = build_module_command

@@ -148,7 +148,7 @@ RETURN = '''
 msg:
     description: Success or failure message
     returned: always
-    type: string
+    type: str
     sample: "Success"
 
 result:
@@ -159,7 +159,7 @@ result:
 error:
     description: the error message returned by the Gitlab API
     returned: failed
-    type: string
+    type: str
     sample: "400: key is already in use"
 
 previous_version:
@@ -295,6 +295,7 @@ def main():
         module.exit_json(changed=changed, msg='Success', result=response, previous_version=existing)
     else:
         module.fail_json(msg='Failure', error=response)
+
 
 if __name__ == '__main__':
     main()

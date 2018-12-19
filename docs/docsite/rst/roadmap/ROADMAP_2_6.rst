@@ -20,11 +20,13 @@ Actual
 - 2018-06-18 Release Candidate 3
 - 2018-06-25 Release Candidate 4
 - 2018-06-26 Release Candidate 5
-
-Expected
-========
-
 - 2018-06-28 Final Release
+
+
+Release Manager
+---------------
+Matt Clay (IRC/GitHub: @mattclay)
+
 
 Engine improvements
 -------------------

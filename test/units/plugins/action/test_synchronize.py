@@ -19,7 +19,7 @@ import yaml
 from pprint import pprint
 
 import ansible.plugins
-from ansible.compat.tests.mock import patch, MagicMock
+from units.compat.mock import patch, MagicMock
 from ansible.plugins.action.synchronize import ActionModule
 
 
@@ -67,10 +67,13 @@ class ConnectionMock(object):
     transport = None
     _new_stdin = StdinMock()
 
+    get_option = MagicMock(return_value='root')
+
     # my shell
     _shell = MagicMock()
     _shell.mkdtemp.return_value = 'mkdir command'
     _shell.join_path.side_effect = os.path.join
+    _shell.get_option = MagicMock(return_value=['root', 'toor'])
 
 
 class PlayContextMock(object):
