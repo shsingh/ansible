@@ -293,13 +293,17 @@ def get_plugin_info(module_dir, limit_to=None, verbose=False):
         # use ansible core library to parse out doc metadata YAML and plaintext examples
         doc, examples, returndocs, metadata = plugin_docs.get_docstring(module_path, fragment_loader, verbose=verbose)
 
-        if metadata and 'removed' in metadata.get('status'):
+        if metadata and 'removed' in metadata.get('status', []):
             continue
 
         category = categories
 
         # Start at the second directory because we don't want the "vendor"
         mod_path_only = os.path.dirname(module_path[len(module_dir):])
+
+        # Find the subcategory for each module
+        relative_dir = mod_path_only.split('/')[1]
+        sub_category = mod_path_only[len(relative_dir) + 2:]
 
         primary_category = ''
         module_categories = []
@@ -316,6 +320,10 @@ def get_plugin_info(module_dir, limit_to=None, verbose=False):
         # the category we will use in links (so list_of_all_plugins can point to plugins/action_plugins/*'
         if module_categories:
             primary_category = module_categories[0]
+
+        if not doc:
+            display.error("*** ERROR: DOCUMENTATION section missing for %s. ***" % module_path)
+            continue
 
         if 'options' in doc and doc['options'] is None:
             display.error("*** ERROR: DOCUMENTATION.options must be a dictionary/hash when used. ***")
@@ -338,6 +346,7 @@ def get_plugin_info(module_dir, limit_to=None, verbose=False):
                                'returndocs': returndocs,
                                'categories': module_categories,
                                'primary_category': primary_category,
+                               'sub_category': sub_category,
                                }
 
     # keep module tests out of becoming module docs
@@ -549,7 +558,12 @@ def process_plugins(module_map, templates, outputname, output_dir, ansible_versi
 
         display.v('about to template %s' % module)
         display.vvvvv(pp.pformat(doc))
-        text = templates['plugin'].render(doc)
+        try:
+            text = templates['plugin'].render(doc)
+        except Exception as e:
+            display.warning(msg="Could not parse %s due to %s" % (module, e))
+            continue
+
         if LooseVersion(jinja2.__version__) < LooseVersion('2.10'):
             # jinja2 < 2.10's indent filter indents blank lines.  Cleanup
             text = re.sub(' +\n', '\n', text)
@@ -587,7 +601,7 @@ def process_categories(plugin_info, categories, templates, output_dir, output_na
         write_data(text, output_dir, category_filename)
 
 
-def process_support_levels(plugin_info, templates, output_dir, plugin_type):
+def process_support_levels(plugin_info, categories, templates, output_dir, plugin_type):
     supported_by = {'Ansible Core Team': {'slug': 'core_supported',
                                           'modules': [],
                                           'output': 'core_maintained.rst',
@@ -650,9 +664,24 @@ These modules are currently shipped with Ansible, but will most likely be shippe
         else:
             raise AnsibleError('Unknown supported_by value: %s' % info['metadata']['supported_by'])
 
-    # Render the module lists
+    # Render the module lists based on category and subcategory
     for maintainers, data in supported_by.items():
+        subcategories = {}
+        subcategories[''] = {}
+        for module in data['modules']:
+            new_cat = plugin_info[module]['sub_category']
+            category = plugin_info[module]['primary_category']
+            if category not in subcategories:
+                subcategories[category] = {}
+                subcategories[category][''] = {}
+                subcategories[category]['']['_modules'] = []
+            if new_cat not in subcategories[category]:
+                subcategories[category][new_cat] = {}
+                subcategories[category][new_cat]['_modules'] = []
+            subcategories[category][new_cat]['_modules'].append(module)
+
         template_data = {'maintainers': maintainers,
+                         'subcategories': subcategories,
                          'modules': data['modules'],
                          'slug': data['slug'],
                          'module_info': plugin_info,
@@ -747,7 +776,7 @@ def main():
         process_categories(plugin_info, categories, templates, output_dir, category_list_name_template, plugin_type)
 
         # Render all the categories for modules
-        process_support_levels(plugin_info, templates, output_dir, plugin_type)
+        process_support_levels(plugin_info, categories, templates, output_dir, plugin_type)
 
 
 if __name__ == '__main__':

@@ -18,15 +18,14 @@
 # ----------------------------------------------------------------------------
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 ################################################################################
 # Documentation
 ################################################################################
 
-ANSIBLE_METADATA = {'metadata_version': '1.1',
-                    'status': ["preview"],
-                    'supported_by': 'community'}
+ANSIBLE_METADATA = {'metadata_version': '1.1', 'status': ["preview"], 'supported_by': 'community'}
 
 DOCUMENTATION = '''
 ---
@@ -77,30 +76,30 @@ options:
     required: true
 extends_documentation_fragment: gcp
 notes:
-- 'API Reference: U(https://cloud.google.com/compute/docs/reference/latest/backendBuckets)'
+- 'API Reference: U(https://cloud.google.com/compute/docs/reference/v1/backendBuckets)'
 - 'Using a Cloud Storage bucket as a load balancer backend: U(https://cloud.google.com/compute/docs/load-balancing/http/backend-bucket)'
 '''
 
 EXAMPLES = '''
 - name: create a bucket
   gcp_storage_bucket:
-      name: "bucket-backendbucket"
-      project: "{{ gcp_project }}"
-      auth_kind: "{{ gcp_cred_kind }}"
-      service_account_file: "{{ gcp_cred_file }}"
-      state: present
+    name: bucket-backendbucket
+    project: "{{ gcp_project }}"
+    auth_kind: "{{ gcp_cred_kind }}"
+    service_account_file: "{{ gcp_cred_file }}"
+    state: present
   register: bucket
 
 - name: create a backend bucket
   gcp_compute_backend_bucket:
-      name: "test_object"
-      bucket_name: "{{ bucket.name }}"
-      description: A BackendBucket to connect LNB w/ Storage Bucket
-      enable_cdn: true
-      project: "test_project"
-      auth_kind: "serviceaccount"
-      service_account_file: "/tmp/auth.pem"
-      state: present
+    name: test_object
+    bucket_name: "{{ bucket.name }}"
+    description: A BackendBucket to connect LNB w/ Storage Bucket
+    enable_cdn: 'true'
+    project: test_project
+    auth_kind: serviceaccount
+    service_account_file: "/tmp/auth.pem"
+    state: present
 '''
 
 RETURN = '''
@@ -164,7 +163,7 @@ def main():
             bucket_name=dict(required=True, type='str'),
             description=dict(type='str'),
             enable_cdn=dict(type='bool'),
-            name=dict(required=True, type='str')
+            name=dict(required=True, type='str'),
         )
     )
 
@@ -220,7 +219,7 @@ def resource_to_request(module):
         u'bucketName': module.params.get('bucket_name'),
         u'description': module.params.get('description'),
         u'enableCdn': module.params.get('enable_cdn'),
-        u'name': module.params.get('name')
+        u'name': module.params.get('name'),
     }
     return_vals = {}
     for k, v in request.items():
@@ -255,8 +254,8 @@ def return_if_object(module, response, kind, allow_not_found=False):
     try:
         module.raise_for_status(response)
         result = response.json()
-    except getattr(json.decoder, 'JSONDecodeError', ValueError) as inst:
-        module.fail_json(msg="Invalid JSON response with error: %s" % inst)
+    except getattr(json.decoder, 'JSONDecodeError', ValueError):
+        module.fail_json(msg="Invalid JSON response with error: %s" % response.text)
 
     if navigate_hash(result, ['error', 'errors']):
         module.fail_json(msg=navigate_hash(result, ['error', 'errors']))
@@ -291,7 +290,7 @@ def response_to_hash(module, response):
         u'description': response.get(u'description'),
         u'enableCdn': response.get(u'enableCdn'),
         u'id': response.get(u'id'),
-        u'name': module.params.get('name')
+        u'name': module.params.get('name'),
     }
 
 
@@ -317,9 +316,9 @@ def wait_for_completion(status, op_result, module):
     op_id = navigate_hash(op_result, ['name'])
     op_uri = async_op_url(module, {'op_id': op_id})
     while status != 'DONE':
-        raise_if_errors(op_result, ['error', 'errors'], 'message')
+        raise_if_errors(op_result, ['error', 'errors'], module)
         time.sleep(1.0)
-        op_result = fetch_resource(module, op_uri, 'compute#operation')
+        op_result = fetch_resource(module, op_uri, 'compute#operation', False)
         status = navigate_hash(op_result, ['status'])
     return op_result
 

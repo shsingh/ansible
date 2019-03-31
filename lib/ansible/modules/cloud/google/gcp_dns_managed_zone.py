@@ -18,15 +18,14 @@
 # ----------------------------------------------------------------------------
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 ################################################################################
 # Documentation
 ################################################################################
 
-ANSIBLE_METADATA = {'metadata_version': '1.1',
-                    'status': ["preview"],
-                    'supported_by': 'community'}
+ANSIBLE_METADATA = {'metadata_version': '1.1', 'status': ["preview"], 'supported_by': 'community'}
 
 DOCUMENTATION = '''
 ---
@@ -83,13 +82,13 @@ notes:
 EXAMPLES = '''
 - name: create a managed zone
   gcp_dns_managed_zone:
-      name: "test_object"
-      dns_name: test.somewild2.example.com.
-      description: test zone
-      project: "test_project"
-      auth_kind: "serviceaccount"
-      service_account_file: "/tmp/auth.pem"
-      state: present
+    name: test_object
+    dns_name: test.somewild2.example.com.
+    description: test zone
+    project: test_project
+    auth_kind: serviceaccount
+    service_account_file: "/tmp/auth.pem"
+    state: present
 '''
 
 RETURN = '''
@@ -127,7 +126,7 @@ nameServerSet:
     a set of DNS name servers that all host the same ManagedZones. Most users will
     leave this field unset.
   returned: success
-  type: list
+  type: str
 creationTime:
   description:
   - The time that this resource was created on the server.
@@ -162,8 +161,8 @@ def main():
             description=dict(required=True, type='str'),
             dns_name=dict(required=True, type='str'),
             name=dict(required=True, type='str'),
-            name_server_set=dict(type='list', elements='str'),
-            labels=dict(type='dict')
+            name_server_set=dict(type='str'),
+            labels=dict(type='dict'),
         )
     )
 
@@ -204,8 +203,7 @@ def create(module, link, kind):
 
 
 def update(module, link, kind, fetch):
-    update_fields(module, resource_to_request(module),
-                  response_to_hash(module, fetch))
+    update_fields(module, resource_to_request(module), response_to_hash(module, fetch))
     return fetch_resource(module, self_link(module), kind)
 
 
@@ -217,14 +215,8 @@ def update_fields(module, request, response):
 def description_update(module, request, response):
     auth = GcpSession(module, 'dns')
     auth.patch(
-        ''.join([
-            "https://www.googleapis.com/dns/v1/",
-            "projects/{project}/managedZones/{name}"
-        ]).format(**module.params),
-        {
-            u'description': module.params.get('description'),
-            u'labels': module.params.get('labels')
-        }
+        ''.join(["https://www.googleapis.com/dns/v1/", "projects/{project}/managedZones/{name}"]).format(**module.params),
+        {u'description': module.params.get('description'), u'labels': module.params.get('labels')},
     )
 
 
@@ -240,7 +232,7 @@ def resource_to_request(module):
         u'dnsName': module.params.get('dns_name'),
         u'name': module.params.get('name'),
         u'nameServerSet': module.params.get('name_server_set'),
-        u'labels': module.params.get('labels')
+        u'labels': module.params.get('labels'),
     }
     return_vals = {}
     for k, v in request.items():
@@ -275,8 +267,8 @@ def return_if_object(module, response, kind, allow_not_found=False):
     try:
         module.raise_for_status(response)
         result = response.json()
-    except getattr(json.decoder, 'JSONDecodeError', ValueError) as inst:
-        module.fail_json(msg="Invalid JSON response with error: %s" % inst)
+    except getattr(json.decoder, 'JSONDecodeError', ValueError):
+        module.fail_json(msg="Invalid JSON response with error: %s" % response.text)
 
     if navigate_hash(result, ['error', 'errors']):
         module.fail_json(msg=navigate_hash(result, ['error', 'errors']))
@@ -313,7 +305,7 @@ def response_to_hash(module, response):
         u'nameServers': response.get(u'nameServers'),
         u'nameServerSet': response.get(u'nameServerSet'),
         u'creationTime': response.get(u'creationTime'),
-        u'labels': response.get(u'labels')
+        u'labels': response.get(u'labels'),
     }
 
 

@@ -18,15 +18,14 @@
 # ----------------------------------------------------------------------------
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 ################################################################################
 # Documentation
 ################################################################################
 
-ANSIBLE_METADATA = {'metadata_version': '1.1',
-                    'status': ["preview"],
-                    'supported_by': 'community'}
+ANSIBLE_METADATA = {'metadata_version': '1.1', 'status': ["preview"], 'supported_by': 'community'}
 
 DOCUMENTATION = '''
 ---
@@ -43,7 +42,7 @@ requirements:
 options:
   filters:
     description:
-    - A list of filter value pairs. Available filters are listed here U(U(https://cloud.google.com/sdk/gcloud/reference/topic/filters).)
+    - A list of filter value pairs. Available filters are listed here U(https://cloud.google.com/sdk/gcloud/reference/topic/filters.)
     - Each additional filter in the list will act be added as an AND condition (filter1
       and filter2) .
   region:
@@ -55,14 +54,15 @@ extends_documentation_fragment: gcp
 '''
 
 EXAMPLES = '''
-- name:  a forwarding rule facts
+- name: " a forwarding rule facts"
   gcp_compute_forwarding_rule_facts:
-      region: us-west1
-      filters:
-      - name = test_object
-      project: test_project
-      auth_kind: serviceaccount
-      service_account_file: "/tmp/auth.pem"
+    region: us-west1
+    filters:
+    - name = test_object
+    project: test_project
+    auth_kind: serviceaccount
+    service_account_file: "/tmp/auth.pem"
+    state: facts
 '''
 
 RETURN = '''
@@ -123,7 +123,7 @@ items:
       - This is used for internal load balancing.
       - "(not used for external load balancing) ."
       returned: success
-      type: dict
+      type: str
     ipVersion:
       description:
       - The IP Version that will be used by this forwarding rule. Valid options are
@@ -156,7 +156,7 @@ items:
         specified, the default network will be used.
       - This field is not used for external load balancing.
       returned: success
-      type: dict
+      type: str
     portRange:
       description:
       - This field is used along with the target field for TargetHttpProxy, TargetHttpsProxy,
@@ -191,7 +191,7 @@ items:
         if the network is in custom subnet mode, a subnetwork must be specified.
       - This field is not used for external load balancing.
       returned: success
-      type: dict
+      type: str
     target:
       description:
       - A reference to a TargetPool resource to receive the matched traffic.
@@ -201,12 +201,37 @@ items:
         to the target object.
       - This field is not used for internal load balancing.
       returned: success
-      type: dict
+      type: str
+    allPorts:
+      description:
+      - When the load balancing scheme is INTERNAL and protocol is TCP/UDP, omit `port`/`port_range`
+        and specify this field as `true` to allow packets addressed to any ports to
+        be forwarded to the backends configured with this forwarding rule.
+      returned: success
+      type: bool
     networkTier:
       description:
       - 'The networking tier used for configuring this address. This field can take
         the following values: PREMIUM or STANDARD. If this field is not specified,
         it is assumed to be PREMIUM.'
+      returned: success
+      type: str
+    serviceLabel:
+      description:
+      - An optional prefix to the service name for this Forwarding Rule.
+      - If specified, will be the first label of the fully qualified service name.
+      - The label must be 1-63 characters long, and comply with RFC1035.
+      - Specifically, the label must be 1-63 characters long and match the regular
+        expression `[a-z]([-a-z0-9]*[a-z0-9])?` which means the first character must
+        be a lowercase letter, and all following characters must be a dash, lowercase
+        letter, or digit, except the last character, which cannot be a dash.
+      - This field is only used for internal load balancing.
+      returned: success
+      type: str
+    serviceName:
+      description:
+      - The internal fully qualified service name for this Forwarding Rule.
+      - This field is only used for internal load balancing.
       returned: success
       type: str
     region:
@@ -229,12 +254,7 @@ import json
 
 
 def main():
-    module = GcpModule(
-        argument_spec=dict(
-            filters=dict(type='list', elements='str'),
-            region=dict(required=True, type='str')
-        )
-    )
+    module = GcpModule(argument_spec=dict(filters=dict(type='list', elements='str'), region=dict(required=True, type='str')))
 
     if not module.params['scopes']:
         module.params['scopes'] = ['https://www.googleapis.com/auth/compute']
@@ -244,9 +264,7 @@ def main():
         items = items.get('items')
     else:
         items = []
-    return_value = {
-        'items': items
-    }
+    return_value = {'items': items}
     module.exit_json(**return_value)
 
 

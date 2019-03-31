@@ -3,4 +3,8 @@ needs/root
 posix/ci/group2
 =======
 shippable/posix/group2
+<<<<<<< HEAD
 >>>>>>> bd072fe83a932598d5d86f9548d8f2ba0ec07371
+=======
+needs/target/template
+>>>>>>> eff1f8851c795cb09f504f564587b892a502ad76

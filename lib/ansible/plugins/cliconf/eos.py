@@ -23,11 +23,11 @@ DOCUMENTATION = """
 ---
 author: Ansible Networking Team
 cliconf: eos
-short_description: Use eos cliconf to run command on eos platform
+short_description: Use eos cliconf to run command on Arista EOS platform
 description:
-  - This eos plugin provides low level abstraction api's for
-    sending and receiving CLI commands from eos network devices.
-version_added: "2.7"
+  - This eos plugin provides low level abstraction apis for
+    sending and receiving CLI commands from Arista EOS network devices.
+version_added: "2.4"
 options:
   eos_use_sessions:
     type: int
@@ -43,6 +43,7 @@ options:
 
 import json
 import time
+import re
 
 from ansible.errors import AnsibleConnectionFailure
 from ansible.module_utils._text import to_text
@@ -69,7 +70,7 @@ class Cliconf(CliconfBase):
             raise ValueError("fetching configuration from %s is not supported" % source)
 
         cmd = 'show %s ' % lookup[source]
-        if format and format is not 'text':
+        if format and format != 'text':
             cmd += '| %s ' % format
 
         cmd += ' '.join(to_list(flags))
@@ -246,6 +247,11 @@ class Cliconf(CliconfBase):
 
         device_info['network_os_hostname'] = data['hostname']
 
+        reply = self.get('bash timeout 5 cat /mnt/flash/boot-config')
+        match = re.search(r'SWI=(.+)$', reply, re.M)
+        if match:
+            device_info['network_os_image'] = match.group(1)
+
         return device_info
 
     def get_device_operations(self):
@@ -272,13 +278,10 @@ class Cliconf(CliconfBase):
         }
 
     def get_capabilities(self):
-        result = {}
-        rpc_list = ['commit', 'discard_changes', 'get_diff', 'run_commands', 'supports_sessions']
-        result['rpc'] = self.get_base_rpc() + rpc_list
-        result['device_info'] = self.get_device_info()
+        result = super(Cliconf, self).get_capabilities()
+        result['rpc'] += ['commit', 'discard_changes', 'get_diff', 'run_commands', 'supports_sessions']
         result['device_operations'] = self.get_device_operations()
         result.update(self.get_option_values())
-        result['network_api'] = 'cliconf'
 
         return json.dumps(result)
 

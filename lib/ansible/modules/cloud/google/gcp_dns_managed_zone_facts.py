@@ -18,15 +18,14 @@
 # ----------------------------------------------------------------------------
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 ################################################################################
 # Documentation
 ################################################################################
 
-ANSIBLE_METADATA = {'metadata_version': '1.1',
-                    'status': ["preview"],
-                    'supported_by': 'community'}
+ANSIBLE_METADATA = {'metadata_version': '1.1', 'status': ["preview"], 'supported_by': 'community'}
 
 DOCUMENTATION = '''
 ---
@@ -48,12 +47,13 @@ extends_documentation_fragment: gcp
 '''
 
 EXAMPLES = '''
-- name:  a managed zone facts
+- name: " a managed zone facts"
   gcp_dns_managed_zone_facts:
-      dns_name: test.somewild2.example.com.
-      project: test_project
-      auth_kind: serviceaccount
-      service_account_file: "/tmp/auth.pem"
+    dns_name: test.somewild2.example.com.
+    project: test_project
+    auth_kind: serviceaccount
+    service_account_file: "/tmp/auth.pem"
+    state: facts
 '''
 
 RETURN = '''
@@ -96,7 +96,7 @@ items:
         is a set of DNS name servers that all host the same ManagedZones. Most users
         will leave this field unset.
       returned: success
-      type: list
+      type: str
     creationTime:
       description:
       - The time that this resource was created on the server.
@@ -122,11 +122,7 @@ import json
 
 
 def main():
-    module = GcpModule(
-        argument_spec=dict(
-            dns_name=dict(type='list', elements='str')
-        )
-    )
+    module = GcpModule(argument_spec=dict(dns_name=dict(type='list', elements='str')))
 
     if not module.params['scopes']:
         module.params['scopes'] = ['https://www.googleapis.com/auth/ndev.clouddns.readwrite']
@@ -136,9 +132,7 @@ def main():
         items = items.get('managedZones')
     else:
         items = []
-    return_value = {
-        'items': items
-    }
+    return_value = {'items': items}
     module.exit_json(**return_value)
 
 
