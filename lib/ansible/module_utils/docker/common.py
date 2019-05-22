@@ -639,10 +639,12 @@ class AnsibleDockerClient(Client):
         images = response
         if tag:
             lookup = "%s:%s" % (name, tag)
+            lookup_digest = "%s@%s" % (name, tag)
             images = []
             for image in response:
                 tags = image.get('RepoTags')
-                if tags and lookup in tags:
+                digests = image.get('RepoDigests')
+                if (tags and lookup in tags) or (digests and lookup_digest in digests):
                     images = [image]
                     break
         return images
@@ -845,6 +847,12 @@ class DifferenceTracker(object):
             before[item['name']] = item['active']
             after[item['name']] = item['parameter']
         return before, after
+
+    def has_difference_for(self, name):
+        '''
+        Returns a boolean if a difference exists for name
+        '''
+        return any(diff for diff in self._diff if diff['name'] == name)
 
     def get_legacy_docker_container_diffs(self):
         '''

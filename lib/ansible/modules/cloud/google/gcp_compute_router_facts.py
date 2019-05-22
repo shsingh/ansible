@@ -65,8 +65,8 @@ EXAMPLES = '''
 '''
 
 RETURN = '''
-items:
-  description: List of items
+resources:
+  description: List of resources
   returned: always
   type: complex
   contains:
@@ -98,7 +98,7 @@ items:
       description:
       - A reference to the network to which this router belongs.
       returned: success
-      type: str
+      type: dict
     bgp:
       description:
       - BGP information specific to this router.
@@ -177,7 +177,7 @@ def main():
         items = items.get('items')
     else:
         items = []
-    return_value = {'items': items}
+    return_value = {'resources': items}
     module.exit_json(**return_value)
 
 

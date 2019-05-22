@@ -17,14 +17,21 @@ module: postgresql_db
 short_description: Add or remove PostgreSQL databases from a remote host.
 description:
    - Add or remove PostgreSQL databases from a remote host.
-version_added: "0.6"
+version_added: '0.6'
 options:
   name:
     description:
-      - name of the database to add or remove
+      - Name of the database to add or remove
     type: str
     required: true
     aliases: [ db ]
+  port:
+    description:
+      - Database port to connect (if needed)
+    type: int
+    default: 5432
+    aliases:
+      - login_port
   owner:
     description:
       - Name of the role to set as owner of the database
@@ -51,7 +58,7 @@ options:
     - Switch to session_role after connecting. The specified session_role must be a role that the current login_user is a member of.
     - Permissions checking for SQL commands is carried out as though the session_role were the one that had logged in originally.
     type: str
-    version_added: "2.8"
+    version_added: '2.8'
   state:
     description:
     - The database state.
@@ -70,24 +77,32 @@ options:
     - File to back up or restore from.
     - Used when I(state) is C(dump) or C(restore).
     type: path
-    version_added: "2.4"
+    version_added: '2.4'
   target_opts:
     description:
     - Further arguments for pg_dump or pg_restore.
     - Used when I(state) is C(dump) or C(restore).
     type: str
-    version_added: "2.4"
+    version_added: '2.4'
   maintenance_db:
     description:
       - The value specifies the initial database (which is also called as maintenance DB) that Ansible connects to.
     type: str
     default: postgres
-    version_added: "2.5"
+    version_added: '2.5'
   conn_limit:
     description:
       - Specifies the database connection limit.
     type: str
     version_added: '2.8'
+  tablespace:
+    description:
+      - The tablespace to set for the database
+        U(https://www.postgresql.org/docs/current/sql-alterdatabase.html).
+      - If you want to move the database back to the default tablespace,
+        explicitly set this to pg_default.
+    type: path
+    version_added: '2.9'
 notes:
 - State C(dump) and C(restore) don't require I(psycopg2) since version 2.8.
 author: "Ansible Core Team"
@@ -133,6 +148,14 @@ EXAMPLES = r'''
     state: dump
     target: /tmp/acme.sql
     target_opts: "-n public"
+
+# Note: In the example below, if database foo exists and has another tablespace
+# the tablespace will be changed to foo. Access to the database will be locked
+# until the copying of database files is finished.
+- name: Create a new database called foo in tablespace bar
+  postgresql_db:
+    name: foo
+    tablespace: bar
 '''
 
 import os
@@ -191,8 +214,11 @@ def get_db_info(cursor, db):
     query = """
     SELECT rolname AS owner,
     pg_encoding_to_char(encoding) AS encoding, encoding AS encoding_id,
-    datcollate AS lc_collate, datctype AS lc_ctype, pg_database.datconnlimit AS conn_limit
-    FROM pg_database JOIN pg_roles ON pg_roles.oid = pg_database.datdba
+    datcollate AS lc_collate, datctype AS lc_ctype, pg_database.datconnlimit AS conn_limit,
+    spcname AS tablespace
+    FROM pg_database
+    JOIN pg_roles ON pg_roles.oid = pg_database.datdba
+    JOIN pg_tablespace ON pg_tablespace.oid = pg_database.dattablespace
     WHERE datname = %(db)s
     """
     cursor.execute(query, {'db': db})
@@ -214,8 +240,8 @@ def db_delete(cursor, db):
         return False
 
 
-def db_create(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit):
-    params = dict(enc=encoding, collate=lc_collate, ctype=lc_ctype, conn_limit=conn_limit)
+def db_create(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit, tablespace):
+    params = dict(enc=encoding, collate=lc_collate, ctype=lc_ctype, conn_limit=conn_limit, tablespace=tablespace)
     if not db_exists(cursor, db):
         query_fragments = ['CREATE DATABASE %s' % pg_quote_identifier(db, 'database')]
         if owner:
@@ -228,6 +254,8 @@ def db_create(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_
             query_fragments.append('LC_COLLATE %(collate)s')
         if lc_ctype:
             query_fragments.append('LC_CTYPE %(ctype)s')
+        if tablespace:
+            query_fragments.append('TABLESPACE %s' % pg_quote_identifier(tablespace, 'tablespace'))
         if conn_limit:
             query_fragments.append("CONNECTION LIMIT %(conn_limit)s" % {"conn_limit": conn_limit})
         query = ' '.join(query_fragments)
@@ -260,10 +288,13 @@ def db_create(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_
             if conn_limit and conn_limit != str(db_info['conn_limit']):
                 changed = set_conn_limit(cursor, db, conn_limit)
 
+            if tablespace and tablespace != db_info['tablespace']:
+                changed = set_tablespace(cursor, db, tablespace)
+
             return changed
 
 
-def db_matches(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit):
+def db_matches(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit, tablespace):
     if not db_exists(cursor, db):
         return False
     else:
@@ -278,6 +309,8 @@ def db_matches(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn
         elif owner and owner != db_info['owner']:
             return False
         elif conn_limit and conn_limit != str(db_info['conn_limit']):
+            return False
+        elif tablespace and tablespace != db_info['tablespace']:
             return False
         else:
             return True
@@ -407,6 +440,14 @@ def do_with_password(module, cmd, password):
     rc, stderr, stdout = module.run_command(cmd, use_unsafe_shell=True, environ_update=env)
     return rc, stderr, stdout, cmd
 
+
+def set_tablespace(cursor, db, tablespace):
+    query = "ALTER DATABASE %s SET TABLESPACE %s" % (
+            pg_quote_identifier(db, 'database'),
+            pg_quote_identifier(tablespace, 'tablespace'))
+    cursor.execute(query)
+    return True
+
 # ===========================================
 # Module execution.
 #
@@ -426,7 +467,8 @@ def main():
         target_opts=dict(type='str', default=''),
         maintenance_db=dict(type='str', default="postgres"),
         session_role=dict(type='str'),
-        conn_limit=dict(type='str', default='')
+        conn_limit=dict(type='str', default=''),
+        tablespace=dict(type='path', default=''),
     )
 
     module = AnsibleModule(
@@ -447,6 +489,7 @@ def main():
     maintenance_db = module.params['maintenance_db']
     session_role = module.params["session_role"]
     conn_limit = module.params['conn_limit']
+    tablespace = module.params['tablespace']
 
     raw_connection = state in ("dump", "restore")
 
@@ -512,7 +555,7 @@ def main():
             if state == "absent":
                 changed = db_exists(cursor, db)
             elif state == "present":
-                changed = not db_matches(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit)
+                changed = not db_matches(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit, tablespace)
             module.exit_json(changed=changed, db=db)
 
         if state == "absent":
@@ -523,7 +566,7 @@ def main():
 
         elif state == "present":
             try:
-                changed = db_create(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit)
+                changed = db_create(cursor, db, owner, template, encoding, lc_collate, lc_ctype, conn_limit, tablespace)
             except SQLParseError as e:
                 module.fail_json(msg=to_native(e), exception=traceback.format_exc())
 

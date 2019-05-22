@@ -60,8 +60,8 @@ EXAMPLES = '''
 '''
 
 RETURN = '''
-items:
-  description: List of items
+resources:
+  description: List of resources
   returned: always
   type: complex
   contains:
@@ -170,7 +170,7 @@ items:
         networks/my-network projects/myproject/global/networks/my-network global/networks/default
         .'
       returned: success
-      type: str
+      type: dict
     priority:
       description:
       - Priority for this rule. This is an integer between 0 and 65535, both inclusive.
@@ -258,7 +258,7 @@ def main():
         items = items.get('items')
     else:
         items = []
-    return_value = {'items': items}
+    return_value = {'resources': items}
     module.exit_json(**return_value)
 
 

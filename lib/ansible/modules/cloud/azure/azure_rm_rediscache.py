@@ -109,6 +109,36 @@ options:
     tenant_settings:
         description:
             - Dict of tenant settings.
+    reboot:
+        description: Reboot specified Redis node(s). There can be potential data loss.
+        suboptions:
+            shard_id:
+                description: If clustering is enabled, the id of the shard to be rebooted.
+                type: int
+            reboot_type:
+                description: Which Redis node(s) to reboot.
+                choices:
+                    - primary
+                    - secondary
+                    - all
+                default: all
+    regenerate_key:
+        description:
+            - Regenerate Redis cache's access keys.
+        suboptions:
+            key_type:
+                description: The Redis key to regenerate.
+                choices:
+                    - primary
+                    - secondary
+    wait_for_provisioning:
+        description:
+            - Wait till the Azure Cache for Redis instance provisioning_state is Succeeded.
+            - It takes several minutes for Azure Cache for Redis to be provisioned ready for use after creating/updating/rebooting.
+            - Set this option to true to wait for provisioning_state. Set to false if you don't care about provisioning_state.
+            - Poll wait timeout is 60 minutes.
+        type: bool
+        default: True
     state:
       description:
         - Assert the state of the Azure Cache for Redis.
@@ -136,7 +166,6 @@ EXAMPLES = '''
           name: basic
           size: C1
 
-
   - name: Scale up the Azure Cache for Redis
     azure_rm_rediscache:
         resource_group: myResourceGroup
@@ -146,6 +175,13 @@ EXAMPLES = '''
           size: C1
         tags:
           testing: foo
+
+  - name: Force reboot the redis cache
+    azure_rm_rediscache:
+        resource_group: myResourceGroup
+        name: myRedisCache
+        reboot:
+          reboot_type: all
 
   - name: Create Azure Cache for Redis with subnet
     azure_rm_rediscache:
@@ -182,6 +218,7 @@ from ansible.module_utils.azure_rm_common import AzureRMModuleBase
 try:
     from msrestazure.azure_exceptions import CloudError
     from msrestazure.azure_operation import AzureOperationPoller
+    from msrest.polling import LROPoller
     from msrest.serialization import Model
     from azure.mgmt.redis import RedisManagementClient
     from azure.mgmt.redis.models import (RedisCreateParameters, RedisUpdateParameters, Sku)
@@ -197,6 +234,25 @@ sku_spec = dict(
     size=dict(
         type='str',
         choices=['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'P1', 'P2', 'P3', 'P4']
+    )
+)
+
+
+reboot_spec = dict(
+    shard_id=dict(
+        type='str'
+    ),
+    reboot_type=dict(
+        type='str',
+        choices=['primary', 'secondary', 'all']
+    )
+)
+
+
+regenerate_key_spec = dict(
+    key_type=dict(
+        type='str',
+        choices=['primary', 'secondary']
     )
 )
 
@@ -234,6 +290,16 @@ def underline_to_hyphen(input):
     if input and isinstance(input, str):
         return input.replace("_", "-")
     return input
+
+
+def get_reboot_type(type):
+    if type == "primary":
+        return "PrimaryNode"
+    if type == "secondary":
+        return "SecondaryNode"
+    if type == "all":
+        return "AllNodes"
+    return type
 
 
 class Actions:
@@ -300,6 +366,18 @@ class AzureRMRedisCaches(AzureRMModuleBase):
                 type='str',
                 default='present',
                 choices=['present', 'absent']
+            ),
+            reboot=dict(
+                type='dict',
+                options=reboot_spec
+            ),
+            regenerate_key=dict(
+                type='dict',
+                options=regenerate_key_spec
+            ),
+            wait_for_provisioning=dict(
+                type='bool',
+                default='True'
             )
         )
 
@@ -317,6 +395,12 @@ class AzureRMRedisCaches(AzureRMModuleBase):
         self.static_ip = None
         self.subnet = None
         self.tenant_settings = None
+        self.reboot = None
+        self.regenerate_key = None
+
+        self.wait_for_provisioning = None
+        self.wait_for_provisioning_polling_interval_in_seconds = 30
+        self.wait_for_provisioning_polling_times = 120
 
         self.tags = None
 
@@ -425,6 +509,14 @@ class AzureRMRedisCaches(AzureRMModuleBase):
                 self.delete_rediscache()
                 self.log('Azure Cache for Redis instance deleted')
 
+        if self.reboot:
+            self.reboot['reboot_type'] = get_reboot_type(self.reboot['reboot_type'])
+            self.force_reboot_rediscache()
+
+        if self.regenerate_key:
+            response = self.rergenerate_rediscache_key()
+            self.results['keys'] = response
+
         return self.results
 
     def check_update(self, existing):
@@ -486,8 +578,11 @@ class AzureRMRedisCaches(AzureRMModuleBase):
             response = self._client.redis.create(resource_group_name=self.resource_group,
                                                  name=self.name,
                                                  parameters=params)
-            if isinstance(response, AzureOperationPoller):
+            if isinstance(response, AzureOperationPoller) or isinstance(response, LROPoller):
                 response = self.get_poller_result(response)
+
+            if self.wait_for_provisioning:
+                self.wait_for_redis_running()
 
         except CloudError as exc:
             self.log('Error attempting to create the Azure Cache for Redis instance.')
@@ -522,8 +617,11 @@ class AzureRMRedisCaches(AzureRMModuleBase):
             response = self._client.redis.update(resource_group_name=self.resource_group,
                                                  name=self.name,
                                                  parameters=params)
-            if isinstance(response, AzureOperationPoller):
+            if isinstance(response, AzureOperationPoller) or isinstance(response, LROPoller):
                 response = self.get_poller_result(response)
+
+            if self.wait_for_provisioning:
+                self.wait_for_redis_running()
 
         except CloudError as exc:
             self.log('Error attempting to update the Azure Cache for Redis instance.')
@@ -571,6 +669,46 @@ class AzureRMRedisCaches(AzureRMModuleBase):
 
         return False
 
+    def force_reboot_rediscache(self):
+        '''
+        Force reboot specified redis cache instance in the specified subscription and resource group.
+
+        :return: True
+        '''
+        self.log("Force reboot the redis cache instance {0}".format(self.name))
+        try:
+            response = self._client.redis.force_reboot(resource_group_name=self.resource_group,
+                                                       name=self.name,
+                                                       reboot_type=self.reboot['reboot_type'],
+                                                       shard_id=self.reboot.get('shard_id'))
+            if isinstance(response, AzureOperationPoller) or isinstance(response, LROPoller):
+                response = self.get_poller_result(response)
+
+            if self.wait_for_provisioning:
+                self.wait_for_redis_running()
+        except CloudError as e:
+            self.log('Error attempting to force reboot the redis cache instance.')
+            self.fail(
+                "Error force rebooting the redis cache instance: {0}".format(str(e)))
+        return True
+
+    def rergenerate_rediscache_key(self):
+        '''
+        Regenerate key of redis cache instance in the specified subscription and resource group.
+
+        :return: True
+        '''
+        self.log("Regenerate key of redis cache instance {0}".format(self.name))
+        try:
+            response = self._client.redis.regenerate_key(resource_group_name=self.resource_group,
+                                                         name=self.name,
+                                                         key_type=self.regenerate_key['key_type'].title())
+            return response.to_dict()
+        except CloudError as e:
+            self.log('Error attempting to regenerate key of redis cache instance.')
+            self.fail(
+                "Error regenerate key of redis cache instance: {0}".format(str(e)))
+
     def get_subnet(self):
         '''
         Gets the properties of the specified subnet.
@@ -606,6 +744,24 @@ class AzureRMRedisCaches(AzureRMModuleBase):
         else:
             subnet_id = self.subnet
         return subnet_id
+
+    def wait_for_redis_running(self):
+        try:
+            response = self._client.redis.get(resource_group_name=self.resource_group, name=self.name)
+            status = response.provisioning_state
+            polling_times = 0
+
+            while polling_times < self.wait_for_provisioning_polling_times:
+                if status.lower() != "succeeded":
+                    polling_times += 1
+                    time.sleep(self.wait_for_provisioning_polling_interval_in_seconds)
+                    response = self._client.redis.get(resource_group_name=self.resource_group, name=self.name)
+                    status = response.provisioning_state
+                else:
+                    return True
+            self.fail("Azure Cache for Redis is not running after 60 mins.")
+        except CloudError as e:
+            self.fail("Failed to get Azure Cache for Redis: {0}".format(str(e)))
 
 
 def main():
