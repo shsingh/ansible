@@ -35,9 +35,12 @@ options:
     tag_names:
       description:
       - List of tag(s) to be managed.
-      - You can also specify category name by specifying colon separated value. For example, "category_name:tag_name".
-      - You can skip category name if you have unique tag names.
+      - User can also specify category name by specifying colon separated value. For example, "category_name:tag_name".
+      - User can also specify tag and category as dict, when tag or category contains colon.
+        See example for more information. Added in version 2.10.
+      - User can skip category name if you have unique tag names.
       required: True
+      type: list
     state:
       description:
       - If C(state) is set to C(add) or C(present) will add the tags to the existing tag list of the given object.
@@ -45,16 +48,19 @@ options:
       - If C(state) is set to C(set) will replace the tags of the given objects with the user defined list of tags.
       default: add
       choices: [ present, absent, add, remove, set ]
+      type: str
     object_type:
       description:
       - Type of object to work with.
       required: True
       choices: [ VirtualMachine, Datacenter, ClusterComputeResource, HostSystem, DistributedVirtualSwitch, DistributedVirtualPortgroup ]
+      type: str
     object_name:
       description:
       - Name of the object to work with.
       - For DistributedVirtualPortgroups the format should be "switch_name:portgroup_name"
       required: True
+      type: str
 extends_documentation_fragment: vmware_rest_client.documentation
 '''
 
@@ -68,6 +74,22 @@ EXAMPLES = r'''
     tag_names:
       - Sample_Tag_0002
       - Category_0001:Sample_Tag_0003
+    object_name: Fedora_VM
+    object_type: VirtualMachine
+    state: add
+  delegate_to: localhost
+
+- name: Specify tag and category as dict
+  vmware_tag_manager:
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    validate_certs: no
+    tag_names:
+      - tag: tag_0001
+        category: cat_0001
+      - tag: tag_0002
+        category: cat_0002
     object_name: Fedora_VM
     object_type: VirtualMachine
     state: add
@@ -137,6 +159,7 @@ from ansible.module_utils.vmware_rest_client import VmwareRestClient
 from ansible.module_utils.vmware import (PyVmomi, find_dvs_by_name, find_dvspg_by_name)
 try:
     from com.vmware.vapi.std_client import DynamicID
+    from com.vmware.vapi.std.errors_client import Error
 except ImportError:
     pass
 
@@ -190,12 +213,6 @@ class VmwareTagManager(VmwareRestClient):
 
         self.tag_names = self.params.get('tag_names')
 
-    def is_tag_category(self, cat_obj, tag_obj):
-        for tag in self.tag_service.list_tags_for_category(cat_obj.id):
-            if tag_obj.name == self.tag_service.get(tag).name:
-                return True
-        return False
-
     def ensure_state(self):
         """
         Manage the internal state of tags
@@ -210,53 +227,73 @@ class VmwareTagManager(VmwareRestClient):
         available_tag_obj = self.get_tags_for_object(tag_service=self.tag_service,
                                                      tag_assoc_svc=self.tag_association_svc,
                                                      dobj=self.dynamic_managed_object)
-        # Already existing tags from the given object
-        avail_tag_obj_name_list = [tag.name for tag in available_tag_obj]
-        results['tag_status']['previous_tags'] = avail_tag_obj_name_list
+
+        _temp_prev_tags = ["%s:%s" % (tag['category_name'], tag['name']) for tag in self.get_tags_for_dynamic_obj(self.dynamic_managed_object)]
+        results['tag_status']['previous_tags'] = _temp_prev_tags
         results['tag_status']['desired_tags'] = self.tag_names
 
         # Check if category and tag combination exists as per user request
         removed_tags_for_set = False
         for tag in self.tag_names:
             category_obj, category_name, tag_name = None, None, None
-            if ":" in tag:
-                # User specified category
-                category_name, tag_name = tag.split(":", 1)
-                category_obj = self.search_svc_object_by_name(self.category_service, category_name)
-                if not category_obj:
-                    self.module.fail_json(msg="Unable to find the category %s" % category_name)
-            else:
-                # User specified only tag
-                tag_name = tag
+            if isinstance(tag, dict):
+                tag_name = tag.get('tag')
+                category_name = tag.get('category')
+                if category_name:
+                    # User specified category
+                    category_obj = self.search_svc_object_by_name(self.category_service, category_name)
+                    if not category_obj:
+                        self.module.fail_json(msg="Unable to find the category %s" % category_name)
+            elif isinstance(tag, str):
+                if ":" in tag:
+                    # User specified category
+                    category_name, tag_name = tag.split(":", 1)
+                    category_obj = self.search_svc_object_by_name(self.category_service, category_name)
+                    if not category_obj:
+                        self.module.fail_json(msg="Unable to find the category %s" % category_name)
+                else:
+                    # User specified only tag
+                    tag_name = tag
 
-            tag_obj = self.search_svc_object_by_name(self.tag_service, tag_name)
+            if category_name:
+                tag_obj = self.get_tag_by_category(tag_name=tag_name, category_name=category_name)
+            else:
+                tag_obj = self.get_tag_by_name(tag_name=tag_name)
+
             if not tag_obj:
                 self.module.fail_json(msg="Unable to find the tag %s" % tag_name)
-
-            if category_name and category_obj and not self.is_tag_category(category_obj, tag_obj):
-                self.module.fail_json(msg="Category %s does not contain tag %s" % (category_name, tag_name))
 
             if action in ('add', 'present'):
                 if tag_obj not in available_tag_obj:
                     # Tag is not already applied
-                    self.tag_association_svc.attach(tag_id=tag_obj.id, object_id=self.dynamic_managed_object)
-                    changed = True
+                    try:
+                        self.tag_association_svc.attach(tag_id=tag_obj.id, object_id=self.dynamic_managed_object)
+                        changed = True
+                    except Error as error:
+                        self.module.fail_json(msg="%s" % self.get_error_message(error))
+
             elif action == 'set':
                 # Remove all tags first
-                if not removed_tags_for_set:
-                    for av_tag in available_tag_obj:
-                        self.tag_association_svc.detach(tag_id=av_tag.id, object_id=self.dynamic_managed_object)
-                    removed_tags_for_set = True
-                self.tag_association_svc.attach(tag_id=tag_obj.id, object_id=self.dynamic_managed_object)
-                changed = True
+                try:
+                    if not removed_tags_for_set:
+                        for av_tag in available_tag_obj:
+                            self.tag_association_svc.detach(tag_id=av_tag.id, object_id=self.dynamic_managed_object)
+                        removed_tags_for_set = True
+                    self.tag_association_svc.attach(tag_id=tag_obj.id, object_id=self.dynamic_managed_object)
+                    changed = True
+                except Error as error:
+                    self.module.fail_json(msg="%s" % self.get_error_message(error))
+
             elif action in ('remove', 'absent'):
                 if tag_obj in available_tag_obj:
-                    self.tag_association_svc.detach(tag_id=tag_obj.id, object_id=self.dynamic_managed_object)
-                    changed = True
+                    try:
+                        self.tag_association_svc.detach(tag_id=tag_obj.id, object_id=self.dynamic_managed_object)
+                        changed = True
+                    except Error as error:
+                        self.module.fail_json(msg="%s" % self.get_error_message(error))
 
-        results['tag_status']['current_tags'] = [tag.name for tag in self.get_tags_for_object(self.tag_service,
-                                                                                              self.tag_association_svc,
-                                                                                              self.dynamic_managed_object)]
+        _temp_curr_tags = ["%s:%s" % (tag['category_name'], tag['name']) for tag in self.get_tags_for_dynamic_obj(self.dynamic_managed_object)]
+        results['tag_status']['current_tags'] = _temp_curr_tags
         results['changed'] = changed
         self.module.exit_json(**results)
 

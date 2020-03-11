@@ -22,6 +22,7 @@ __metaclass__ = type
 from ansible import constants as C
 from ansible import context
 from ansible.errors import AnsibleParserError, AnsibleAssertionError
+from ansible.module_utils._text import to_native
 from ansible.module_utils.six import string_types
 from ansible.playbook.attribute import FieldAttribute
 from ansible.playbook.base import Base
@@ -52,11 +53,11 @@ class Play(Base, Taggable, CollectionSearch):
     """
 
     # =================================================================================
-    _hosts = FieldAttribute(isa='list', required=True, listof=string_types, always_post_validate=True)
+    _hosts = FieldAttribute(isa='list', required=True, listof=string_types, always_post_validate=True, priority=-1)
 
     # Facts
     _gather_facts = FieldAttribute(isa='bool', default=None, always_post_validate=True)
-    _gather_subset = FieldAttribute(isa='list', default=None, listof=string_types, always_post_validate=True)
+    _gather_subset = FieldAttribute(isa='list', default=(lambda: C.DEFAULT_GATHER_SUBSET), listof=string_types, always_post_validate=True)
     _gather_timeout = FieldAttribute(isa='int', default=C.DEFAULT_GATHER_TIMEOUT, always_post_validate=True)
     _fact_path = FieldAttribute(isa='string', default=C.DEFAULT_FACT_PATH)
 
@@ -145,7 +146,7 @@ class Play(Base, Taggable, CollectionSearch):
         try:
             return load_list_of_blocks(ds=ds, play=self, variable_manager=self._variable_manager, loader=self._loader)
         except AssertionError as e:
-            raise AnsibleParserError("A malformed block was encountered while loading tasks", obj=self._ds, orig_exc=e)
+            raise AnsibleParserError("A malformed block was encountered while loading tasks: %s" % to_native(e), obj=self._ds, orig_exc=e)
 
     def _load_pre_tasks(self, attr, ds):
         '''
@@ -191,7 +192,8 @@ class Play(Base, Taggable, CollectionSearch):
             ds = []
 
         try:
-            role_includes = load_list_of_roles(ds, play=self, variable_manager=self._variable_manager, loader=self._loader)
+            role_includes = load_list_of_roles(ds, play=self, variable_manager=self._variable_manager,
+                                               loader=self._loader, collection_search_list=self.collections)
         except AssertionError as e:
             raise AnsibleParserError("A malformed role declaration was encountered.", obj=self._ds, orig_exc=e)
 
@@ -199,11 +201,9 @@ class Play(Base, Taggable, CollectionSearch):
         for ri in role_includes:
             roles.append(Role.load(ri, play=self))
 
-        return self._extend_value(
-            self.roles,
-            roles,
-            prepend=True
-        )
+        self.roles[:0] = roles
+
+        return self.roles
 
     def _load_vars_prompt(self, attr, ds):
         new_ds = preprocess_vars(ds)
@@ -211,9 +211,11 @@ class Play(Base, Taggable, CollectionSearch):
         if new_ds is not None:
             for prompt_data in new_ds:
                 if 'name' not in prompt_data:
-                    raise AnsibleParserError("Invalid vars_prompt data structure", obj=ds)
-                else:
-                    vars_prompts.append(prompt_data)
+                    raise AnsibleParserError("Invalid vars_prompt data structure, missing 'name' key", obj=ds)
+                for key in prompt_data:
+                    if key not in ('name', 'prompt', 'default', 'private', 'confirm', 'encrypt', 'salt_size', 'salt', 'unsafe'):
+                        raise AnsibleParserError("Invalid vars_prompt data structure, found unsupported key '%s'" % key, obj=ds)
+                vars_prompts.append(prompt_data)
         return vars_prompts
 
     def _compile_roles(self):

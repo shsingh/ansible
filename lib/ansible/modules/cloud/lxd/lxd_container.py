@@ -145,7 +145,7 @@ notes:
   - You can copy a file from the host to the container
     with the Ansible M(copy) and M(template) module and the `lxd` connection plugin.
     See the example below.
-  - You can copy a file in the creatd container to the localhost
+  - You can copy a file in the created container to the localhost
     with `command=lxc file pull container_name/dir/filename filename`.
     See the first example below.
 '''
@@ -300,6 +300,9 @@ ANSIBLE_LXD_STATES = {
     'Frozen': 'frozen',
 }
 
+# ANSIBLE_LXD_DEFAULT_URL is a default value of the lxd endpoint
+ANSIBLE_LXD_DEFAULT_URL = 'unix:/var/lib/lxd/unix.socket'
+
 # CONFIG_PARAMS is a list of config attribute names.
 CONFIG_PARAMS = [
     'architecture', 'config', 'devices', 'ephemeral', 'profiles', 'source'
@@ -329,7 +332,9 @@ class LXDContainerManagement(object):
         self.debug = self.module._verbosity >= 4
 
         try:
-            if os.path.exists(self.module.params['snap_url'].replace('unix:', '')):
+            if self.module.params['url'] != ANSIBLE_LXD_DEFAULT_URL:
+                self.url = self.module.params['url']
+            elif os.path.exists(self.module.params['snap_url'].replace('unix:', '')):
                 self.url = self.module.params['snap_url']
             else:
                 self.url = self.module.params['url']
@@ -502,6 +507,8 @@ class LXDContainerManagement(object):
         if key == 'config':
             old_configs = dict((k, v) for k, v in self.old_container_json['metadata'][key].items() if not k.startswith('volatile.'))
             for k, v in self.config['config'].items():
+                if k not in old_configs:
+                    return True
                 if old_configs[k] != v:
                     return True
             return False
@@ -621,7 +628,7 @@ def main():
             ),
             url=dict(
                 type='str',
-                default='unix:/var/lib/lxd/unix.socket'
+                default=ANSIBLE_LXD_DEFAULT_URL
             ),
             snap_url=dict(
                 type='str',

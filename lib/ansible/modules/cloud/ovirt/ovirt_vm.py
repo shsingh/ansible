@@ -28,7 +28,7 @@ options:
             - ID of the Virtual Machine to manage.
     state:
         description:
-            - Should the Virtual Machine be running/stopped/present/absent/suspended/next_run/registered/exported.
+            - Should the Virtual Machine be running/stopped/present/absent/suspended/next_run/registered/exported/reboot.
               When C(state) is I(registered) and the unregistered VM's name
               belongs to an already registered in engine VM in the same DC
               then we fail to register the unregistered template.
@@ -38,7 +38,8 @@ options:
             - Please check I(notes) to more detailed description of states.
             - I(exported) state will export the VM to export domain or as OVA.
             - I(registered) is supported since 2.4.
-        choices: [ absent, next_run, present, registered, running, stopped, suspended, exported ]
+            - I(reboot) is supported since 2.10, virtual machine is rebooted only if it's in up state.
+        choices: [ absent, next_run, present, registered, running, stopped, suspended, exported, reboot ]
         default: present
     cluster:
         description:
@@ -105,12 +106,12 @@ options:
         version_added: "2.5"
     affinity_group_mappings:
         description:
-            - "Mapper which maps affinty name between VM's OVF and the destination affinity this VM should be registered to,
+            - "Mapper which maps affinity name between VM's OVF and the destination affinity this VM should be registered to,
                relevant when C(state) is registered."
         version_added: "2.5"
     affinity_label_mappings:
         description:
-            - "Mappper which maps affinity label name between VM's OVF and the destination label this VM should be registered to,
+            - "Mapper which maps affinity label name between VM's OVF and the destination label this VM should be registered to,
                relevant when C(state) is registered."
         version_added: "2.5"
     lun_mappings:
@@ -151,7 +152,7 @@ options:
         description:
             - Name of the storage domain where all template disks should be created.
             - This parameter is considered only when C(template) is provided.
-            - IMPORTANT - This parameter is not idempotent, if the VM exists and you specfiy different storage domain,
+            - IMPORTANT - This parameter is not idempotent, if the VM exists and you specify different storage domain,
               disk won't move.
         version_added: "2.4"
     disk_format:
@@ -194,7 +195,7 @@ options:
             - Default value is set by oVirt/RHV engine.
     cpu_threads:
         description:
-            - Number of virtual CPUs sockets of the Virtual Machine.
+            - Number of threads per core of the Virtual Machine.
             - Default value is set by oVirt/RHV engine.
         version_added: "2.5"
     type:
@@ -262,7 +263,7 @@ options:
         version_added: "2.5"
     lease:
         description:
-            - Name of the storage domain this virtual machine lease reside on.
+            - Name of the storage domain this virtual machine lease reside on. Pass an empty string to remove the lease.
             - NOTE - Supported since oVirt 4.1.
         version_added: "2.4"
     custom_compatibility_version:
@@ -274,7 +275,7 @@ options:
     host_devices:
         description:
             - Single Root I/O Virtualization - technology that allows single device to expose multiple endpoints that can be passed to VMs
-            - host_devices is an list which contain dictinary with name and state of device
+            - host_devices is an list which contain dictionary with name and state of device
         version_added: "2.7"
     delete_protected:
         description:
@@ -332,7 +333,7 @@ options:
                 description:
                     - Custom MAC address of the network interface, by default it's obtained from MAC pool.
                     - "NOTE - This parameter is used only when C(state) is I(running) or I(present) and is able to only create NICs.
-                    To manage NICs of the VM in more depth please use M(ovirt_nics) module instead."
+                    To manage NICs of the VM in more depth please use M(ovirt_nic) module instead."
     disks:
         description:
             - List of disks, which should be attached to Virtual Machine. Disk is described by following dictionary.
@@ -346,7 +347,7 @@ options:
             interface:
                 description:
                     - Interface of the disk.
-                choices: ['virtio', 'IDE']
+                choices: ['virtio', 'ide']
                 default: 'virtio'
             bootable:
                 description:
@@ -356,7 +357,7 @@ options:
                 description:
                     - I(True) if the disk should be activated, default is activated.
                     - "NOTE - This parameter is used only when C(state) is I(running) or I(present) and is able to only attach disks.
-                    To manage disks of the VM in more depth please use M(ovirt_disks) module instead."
+                    To manage disks of the VM in more depth please use M(ovirt_disk) module instead."
                 type: bool
     sysprep:
         description:
@@ -441,6 +442,24 @@ options:
             nic_gateway:
                 description:
                     - If boot protocol is static, set this gateway to network interface of Virtual Machine.
+            nic_boot_protocol_v6:
+                description:
+                    - Set boot protocol of the network interface of Virtual Machine.
+                choices: ['none', 'dhcp', 'static']
+                version_added: "2.9"
+            nic_ip_address_v6:
+                description:
+                    - If boot protocol is static, set this IP address to network interface of Virtual Machine.
+                version_added: "2.9"
+            nic_netmask_v6:
+                description:
+                    - If boot protocol is static, set this netmask to network interface of Virtual Machine.
+                version_added: "2.9"
+            nic_gateway_v6:
+                description:
+                    - If boot protocol is static, set this gateway to network interface of Virtual Machine.
+                    - For IPv6 addresses the value is an integer in the range of 0-128, which represents the subnet prefix.
+                version_added: "2.9"
             nic_name:
                 description:
                     - Set name to network interface of Virtual Machine.
@@ -467,6 +486,23 @@ options:
             nic_gateway:
                 description:
                     - If boot protocol is static, set this gateway to network interface of Virtual Machine.
+            nic_boot_protocol_v6:
+                description:
+                    - Set boot protocol of the network interface of Virtual Machine. Can be one of C(none), C(dhcp) or C(static).
+                version_added: "2.9"
+            nic_ip_address_v6:
+                description:
+                    - If boot protocol is static, set this IP address to network interface of Virtual Machine.
+                version_added: "2.9"
+            nic_netmask_v6:
+                description:
+                    - If boot protocol is static, set this netmask to network interface of Virtual Machine.
+                version_added: "2.9"
+            nic_gateway_v6:
+                description:
+                    - If boot protocol is static, set this gateway to network interface of Virtual Machine.
+                    - For IPv6 addresses the value is an integer in the range of 0-128, which represents the subnet prefix.
+                version_added: "2.9"
             nic_name:
                 description:
                     - Set name to network interface of Virtual Machine.
@@ -688,16 +724,21 @@ options:
         suboptions:
             index:
                 description:
-                    - "The index of this NUMA node (mandatory)."
+                    - "The index of this NUMA node."
+                required: True
             memory:
                 description:
-                    - "Memory size of the NUMA node in MiB (mandatory)."
+                    - "Memory size of the NUMA node in MiB."
+                required: True
             cores:
                 description:
-                    - "list of VM CPU cores indexes to be included in this NUMA node (mandatory)."
+                    - "List of VM CPU cores indexes to be included in this NUMA node."
+                type: list
+                required: True
             numa_node_pins:
                 description:
-                    - "list of physical NUMA node indexes to pin this virtual NUMA node to."
+                    - "List of physical NUMA node indexes to pin this virtual NUMA node to."
+                type: list
         version_added: "2.6"
     rng_device:
         description:
@@ -743,6 +784,31 @@ options:
             protocol:
                 description:
                     - Graphical protocol, a list of I(spice), I(vnc), or both.
+                type: list
+            disconnect_action:
+                description:
+                    - "Returns the action that will take place when the graphic console(SPICE only) is disconnected. The options are:"
+                    - I(none) No action is taken.
+                    - I(lock_screen) Locks the currently active user session.
+                    - I(logout) Logs out the currently active user session.
+                    - I(reboot) Initiates a graceful virtual machine reboot.
+                    - I(shutdown) Initiates a graceful virtual machine shutdown.
+                type: str
+                version_added: "2.10"
+            keyboard_layout:
+                description:
+                    - The keyboard layout to use with this graphic console.
+                    - This option is only available for the VNC console type.
+                    - If no keyboard is enabled then it won't be reported.
+                type: str
+                version_added: "2.10"
+            monitors:
+                description:
+                    - The number of monitors opened for this graphic console.
+                    - This option is only available for the SPICE protocol.
+                    - Possible values are 1, 2 or 4.
+                type: int
+                version_added: "2.10"
         version_added: "2.5"
     exclusive:
         description:
@@ -770,7 +836,7 @@ options:
         version_added: "2.8"
     force_migrate:
         description:
-            - "If I(true), the VM will migrate even if it is defined as non-migratable."
+            - If I(true), the VM will migrate when I(placement_policy=user-migratable) but not when I(placement_policy=pinned).
         version_added: "2.8"
         type: bool
     migrate:
@@ -796,6 +862,10 @@ options:
             - "VM should have snapshot specified by C(snapshot)."
             - "If C(snapshot_name) specified C(snapshot_vm) is required."
         version_added: "2.9"
+    custom_emulated_machine:
+        description:
+            - "Sets the value of the custom_emulated_machine attribute."
+        version_added: "2.10"
 
 notes:
     - If VM is in I(UNASSIGNED) or I(UNKNOWN) state before any operation, the module will fail.
@@ -814,6 +884,8 @@ notes:
       I(REBOOTING), I(POWERING_UP), I(RESTORING_STATE), I(WAIT_FOR_LAUNCH). If VM is in I(PAUSED) or I(DOWN) state,
       we start the VM. Then we suspend the VM.
       When user specify I(absent) C(state), we forcibly stop the VM in any state and remove it.
+    - "If you update a VM parameter that requires a reboot, the oVirt engine always creates a new snapshot for the VM,
+      and an Ansible playbook will report this as changed."
 extends_documentation_fragment: ovirt
 '''
 
@@ -971,6 +1043,16 @@ EXAMPLES = '''
       nic_netmask: 255.255.252.0
       nic_gateway: 10.34.63.254
       nic_on_boot: true
+    # IP version 6 parameters are supported since ansible 2.9
+    - nic_name: eth2
+      nic_boot_protocol_v6: static
+      nic_ip_address_v6: '2620:52:0:2282:b898:1f69:6512:36c5'
+      nic_gateway_v6: '2620:52:0:2282:b898:1f69:6512:36c9'
+      nic_netmask_v6: '120'
+      nic_on_boot: true
+    - nic_name: eth3
+      nic_on_boot: true
+      nic_boot_protocol_v6: dhcp
 
 - name: Run VM with sysprep
   ovirt_vm:
@@ -1114,10 +1196,10 @@ EXAMPLES = '''
         - spice
         - vnc
 
-# Execute remote viever to VM
+# Execute remote viewer to VM
 - block:
   - name: Create a ticket for console for a running VM
-    ovirt_vms:
+    ovirt_vm:
       name: myvm
       ticket: true
       state: running
@@ -1160,6 +1242,33 @@ EXAMPLES = '''
     snapshot_name: myvm_snap
     name: myvm_clone
     state: present
+
+- name: Import external ova VM
+  ovirt_vm:
+    cluster: mycluster
+    name: myvm
+    host: myhost
+    timeout: 1800
+    poll_interval: 30
+    kvm:
+      name: myvm
+      url: ova:///path/myvm.ova
+      storage_domain: mystorage
+
+- name: Cpu pinning of 0#12_1#13_2#14_3#15
+  ovirt_vm:
+    state: present
+    cluster: mycluster
+    name: myvm
+    cpu_pinning:
+      - cpu: 12
+        vcpu: 0
+      - cpu: 13
+        vcpu: 1
+      - cpu: 14
+        vcpu: 2
+      - cpu: 15
+        vcpu: 3
 '''
 
 
@@ -1219,27 +1328,31 @@ class VmsModule(BaseModule):
         """
         template = None
         templates_service = self._connection.system_service().templates_service()
-        if self.param('template'):
-            templates = templates_service.list(
-                search='name=%s and cluster=%s' % (self.param('template'), self.param('cluster'))
-            )
-            if self.param('template_version'):
-                templates = [
-                    t for t in templates
-                    if t.version.version_number == self.param('template_version')
-                ]
-            if not templates:
-                raise ValueError(
-                    "Template with name '%s' and version '%s' in cluster '%s' was not found'" % (
-                        self.param('template'),
-                        self.param('template_version'),
-                        self.param('cluster')
-                    )
+        if self._is_new:
+            if self.param('template'):
+                clusters_service = self._connection.system_service().clusters_service()
+                cluster = search_by_name(clusters_service, self.param('cluster'))
+                data_center = self._connection.follow_link(cluster.data_center)
+                templates = templates_service.list(
+                    search='name=%s and datacenter=%s' % (self.param('template'), data_center.name)
                 )
-            template = sorted(templates, key=lambda t: t.version.version_number, reverse=True)[0]
-        elif self._is_new:
-            # If template isn't specified and VM is about to be created specify default template:
-            template = templates_service.template_service('00000000-0000-0000-0000-000000000000').get()
+                if self.param('template_version'):
+                    templates = [
+                        t for t in templates
+                        if t.version.version_number == self.param('template_version')
+                    ]
+                if not templates:
+                    raise ValueError(
+                        "Template with name '%s' and version '%s' in data center '%s' was not found'" % (
+                            self.param('template'),
+                            self.param('template_version'),
+                            data_center.name
+                        )
+                    )
+                template = sorted(templates, key=lambda t: t.version.version_number, reverse=True)[0]
+            else:
+                # If template isn't specified and VM is about to be created specify default template:
+                template = templates_service.template_service('00000000-0000-0000-0000-000000000000').get()
 
         return template
 
@@ -1305,6 +1418,7 @@ class VmsModule(BaseModule):
         template = self.__get_template_with_version()
         cluster = self.__get_cluster()
         snapshot = self.__get_snapshot()
+        display = self.param('graphical_console') or dict()
 
         disk_attachments = self.__get_storage_domain_and_all_template_disks(template)
 
@@ -1321,6 +1435,7 @@ class VmsModule(BaseModule):
             use_latest_template_version=self.param('use_latest_template_version'),
             stateless=self.param('stateless') or self.param('use_latest_template_version'),
             delete_protected=self.param('delete_protected'),
+            custom_emulated_machine=self.param('custom_emulated_machine'),
             bios=(
                 otypes.Bios(boot_menu=otypes.BootMenu(enabled=self.param('boot_menu')))
             ) if self.param('boot_menu') is not None else None,
@@ -1345,7 +1460,7 @@ class VmsModule(BaseModule):
                     id=get_id_by_name(
                         service=self._connection.system_service().storage_domains_service(),
                         name=self.param('lease')
-                    )
+                    ) if self.param('lease') else None
                 )
             ) if self.param('lease') is not None else None,
             cpu=otypes.Cpu(
@@ -1430,8 +1545,16 @@ class VmsModule(BaseModule):
             ) if self.param('placement_policy') else None,
             soundcard_enabled=self.param('soundcard_enabled'),
             display=otypes.Display(
-                smartcard_enabled=self.param('smartcard_enabled')
-            ) if self.param('smartcard_enabled') is not None else None,
+                smartcard_enabled=self.param('smartcard_enabled'),
+                disconnect_action=display.get('disconnect_action'),
+                keyboard_layout=display.get('keyboard_layout'),
+                monitors=display.get('monitors'),
+            ) if (
+                self.param('smartcard_enabled') is not None or
+                display.get('disconnect_action') is not None or
+                display.get('keyboard_layout') is not None or
+                display.get('monitors') is not None
+            ) else None,
             io=otypes.Io(
                 threads=self.param('io_threads'),
             ) if self.param('io_threads') is not None else None,
@@ -1500,6 +1623,7 @@ class VmsModule(BaseModule):
 
         cpu_mode = getattr(entity.cpu, 'mode')
         vm_display = entity.display
+        provided_vm_display = self.param('graphical_console') or dict()
         return (
             check_cpu_pinning() and
             check_custom_properties() and
@@ -1532,6 +1656,7 @@ class VmsModule(BaseModule):
             equal(self.param('stateless'), entity.stateless) and
             equal(self.param('cpu_shares'), entity.cpu_shares) and
             equal(self.param('delete_protected'), entity.delete_protected) and
+            equal(self.param('custom_emulated_machine'), entity.custom_emulated_machine) and
             equal(self.param('use_latest_template_version'), entity.use_latest_template_version) and
             equal(self.param('boot_devices'), [str(dev) for dev in getattr(entity.os.boot, 'devices', [])]) and
             equal(self.param('instance_type'), get_link_name(self._connection, entity.instance_type), ignore_case=True) and
@@ -1542,7 +1667,10 @@ class VmsModule(BaseModule):
             equal(self.param('serial_policy_value'), getattr(entity.serial_number, 'value', None)) and
             equal(self.param('placement_policy'), str(entity.placement_policy.affinity) if entity.placement_policy else None) and
             equal(self.param('numa_tune_mode'), str(entity.numa_tune_mode)) and
-            equal(self.param('rng_device'), str(entity.rng_device.source) if entity.rng_device else None)
+            equal(self.param('rng_device'), str(entity.rng_device.source) if entity.rng_device else None) and
+            equal(provided_vm_display.get('monitors'), getattr(vm_display, 'monitors', None)) and
+            equal(provided_vm_display.get('keyboard_layout'), getattr(vm_display, 'keyboard_layout', None)) and
+            equal(provided_vm_display.get('disconnect_action'), getattr(vm_display, 'disconnect_action', None), ignore_case=True)
         )
 
     def pre_create(self, entity):
@@ -1605,7 +1733,6 @@ class VmsModule(BaseModule):
         vm_service = self._service.service(entity.id)
         self._wait_for_UP(vm_service)
         self._attach_cd(vm_service.get())
-        self._migrate_vm(vm_service.get())
 
     def _attach_cd(self, entity):
         cd_iso = self.param('cd_iso')
@@ -1671,7 +1798,7 @@ class VmsModule(BaseModule):
         """
         This function will first wait for the status DOWN of the VM.
         Then it will find the active snapshot and wait until it's state is OK for
-        stateless VMs and statless snaphot is removed.
+        stateless VMs and stateless snapshot is removed.
         """
         vm_service = self._service.vm_service(vm.id)
         wait(
@@ -1730,9 +1857,6 @@ class VmsModule(BaseModule):
 
         # If there are not gc add any gc to be added:
         protocol = graphical_console.get('protocol')
-        if isinstance(protocol, str):
-            protocol = [protocol]
-
         current_protocols = [str(gc.protocol) for gc in graphical_consoles]
         if not current_protocols:
             if not self._module.check_mode:
@@ -1825,17 +1949,20 @@ class VmsModule(BaseModule):
                 )
             )
 
-    def __attach_numa_nodes(self, entity):
-        updated = False
-        numa_nodes_service = self._service.service(entity.id).numa_nodes_service()
+    def __get_numa_serialized(self, numa):
+        return sorted([(x.index,
+                        [y.index for y in x.cpu.cores] if x.cpu else [],
+                        x.memory,
+                        [y.index for y in x.numa_node_pins] if x.numa_node_pins else []
+                        ) for x in numa], key=lambda x: x[0])
 
+    def __attach_numa_nodes(self, entity):
+        numa_nodes_service = self._service.service(entity.id).numa_nodes_service()
+        existed_numa_nodes = numa_nodes_service.list()
         if len(self.param('numa_nodes')) > 0:
             # Remove all existing virtual numa nodes before adding new ones
-            existed_numa_nodes = numa_nodes_service.list()
-            existed_numa_nodes.sort(reverse=len(existed_numa_nodes) > 1 and existed_numa_nodes[1].index > existed_numa_nodes[0].index)
-            for current_numa_node in existed_numa_nodes:
+            for current_numa_node in sorted(existed_numa_nodes, reverse=True, key=lambda x: x.index):
                 numa_nodes_service.node_service(current_numa_node.id).remove()
-                updated = True
 
         for numa_node in self.param('numa_nodes'):
             if numa_node is None or numa_node.get('index') is None or numa_node.get('cores') is None or numa_node.get('memory') is None:
@@ -1859,9 +1986,7 @@ class VmsModule(BaseModule):
                     ] if numa_node.get('numa_node_pins') is not None else None,
                 )
             )
-            updated = True
-
-        return updated
+        return self.__get_numa_serialized(numa_nodes_service.list()) != self.__get_numa_serialized(existed_numa_nodes)
 
     def __attach_watchdog(self, entity):
         watchdogs_service = self._service.service(entity.id).watchdogs_service()
@@ -1932,20 +2057,38 @@ class VmsModule(BaseModule):
                         boot_protocol=otypes.BootProtocol(
                             nic.pop('nic_boot_protocol').lower()
                         ) if nic.get('nic_boot_protocol') else None,
+                        ipv6_boot_protocol=otypes.BootProtocol(
+                            nic.pop('nic_boot_protocol_v6').lower()
+                        ) if nic.get('nic_boot_protocol_v6') else None,
                         name=nic.pop('nic_name', None),
                         on_boot=nic.pop('nic_on_boot', None),
                         ip=otypes.Ip(
                             address=nic.pop('nic_ip_address', None),
                             netmask=nic.pop('nic_netmask', None),
                             gateway=nic.pop('nic_gateway', None),
+                            version=otypes.IpVersion('v4')
                         ) if (
                             nic.get('nic_gateway') is not None or
                             nic.get('nic_netmask') is not None or
                             nic.get('nic_ip_address') is not None
                         ) else None,
+                        ipv6=otypes.Ip(
+                            address=nic.pop('nic_ip_address_v6', None),
+                            netmask=nic.pop('nic_netmask_v6', None),
+                            gateway=nic.pop('nic_gateway_v6', None),
+                            version=otypes.IpVersion('v6')
+                        ) if (
+                            nic.get('nic_gateway_v6') is not None or
+                            nic.get('nic_netmask_v6') is not None or
+                            nic.get('nic_ip_address_v6') is not None
+                        ) else None,
                     )
                     for nic in cloud_init_nics
                     if (
+                        nic.get('nic_boot_protocol_v6') is not None or
+                        nic.get('nic_ip_address_v6') is not None or
+                        nic.get('nic_gateway_v6') is not None or
+                        nic.get('nic_netmask_v6') is not None or
                         nic.get('nic_gateway') is not None or
                         nic.get('nic_netmask') is not None or
                         nic.get('nic_ip_address') is not None or
@@ -2080,13 +2223,13 @@ def _get_lun_mappings(module):
                             ['iscsi', 'fcp']) else None,
                         logical_units=[
                             otypes.LogicalUnit(
-                                id=lunMapping['dest_logical_unit_id'],
-                                port=lunMapping['dest_logical_unit_port'],
-                                portal=lunMapping['dest_logical_unit_portal'],
-                                address=lunMapping['dest_logical_unit_address'],
-                                target=lunMapping['dest_logical_unit_target'],
-                                password=lunMapping['dest_logical_unit_password'],
-                                username=lunMapping['dest_logical_unit_username'],
+                                id=lunMapping.get('dest_logical_unit_id'),
+                                port=lunMapping.get('dest_logical_unit_port'),
+                                portal=lunMapping.get('dest_logical_unit_portal'),
+                                address=lunMapping.get('dest_logical_unit_address'),
+                                target=lunMapping.get('dest_logical_unit_target'),
+                                password=lunMapping.get('dest_logical_unit_password'),
+                                username=lunMapping.get('dest_logical_unit_username'),
                             )
                         ],
                     ),
@@ -2230,7 +2373,9 @@ def control_state(vm, vms_service, module):
 
 def main():
     argument_spec = ovirt_full_argument_spec(
-        state=dict(type='str', default='present', choices=['absent', 'next_run', 'present', 'registered', 'running', 'stopped', 'suspended', 'exported']),
+        state=dict(type='str', default='present', choices=[
+            'absent', 'next_run', 'present', 'registered', 'running', 'stopped', 'suspended', 'exported', 'reboot'
+        ]),
         name=dict(type='str'),
         id=dict(type='str'),
         cluster=dict(type='str'),
@@ -2270,6 +2415,7 @@ def main():
         lease=dict(type='str'),
         stateless=dict(type='bool'),
         delete_protected=dict(type='bool'),
+        custom_emulated_machine=dict(type='str'),
         force=dict(type='bool', default=False),
         nics=dict(type='list', default=[]),
         cloud_init=dict(type='dict'),
@@ -2307,7 +2453,16 @@ def main():
         custom_properties=dict(type='list'),
         watchdog=dict(type='dict'),
         host_devices=dict(type='list'),
-        graphical_console=dict(type='dict'),
+        graphical_console=dict(
+            type='dict',
+            options=dict(
+                headless_mode=dict(type='bool'),
+                protocol=dict(type='list'),
+                disconnect_action=dict(type='str'),
+                keyboard_layout=dict(type='str'),
+                monitors=dict(type='int'),
+            )
+        ),
         exclusive=dict(type='bool'),
         export_domain=dict(default=None),
         export_ova=dict(type='dict'),
@@ -2342,6 +2497,8 @@ def main():
         )
         vm = vms_module.search_entity(list_params={'all_content': True})
 
+        # Boolean variable to mark if vm existed before module was executed
+        vm_existed = True if vm else False
         control_state(vm, vms_service, module)
         if state in ('present', 'running', 'next_run'):
             if module.params['xen'] or module.params['kvm'] or module.params['vmware']:
@@ -2386,8 +2543,8 @@ def main():
                     ),
                     wait_condition=lambda vm: vm.status == otypes.VmStatus.UP,
                     # Start action kwargs:
-                    use_cloud_init=True if not module.params.get('cloud_init_persist') and module.params.get('cloud_init') is not None else None,
-                    use_sysprep=True if not module.params.get('cloud_init_persist') and module.params.get('sysprep') is not None else None,
+                    use_cloud_init=True if not module.params.get('cloud_init_persist') and module.params.get('cloud_init') else None,
+                    use_sysprep=True if not module.params.get('cloud_init_persist') and module.params.get('sysprep') else None,
                     vm=otypes.Vm(
                         placement_policy=otypes.VmPlacementPolicy(
                             hosts=[otypes.Host(name=module.params['host'])]
@@ -2425,6 +2582,9 @@ def main():
                         action_condition=lambda vm: vm.status == otypes.VmStatus.UP,
                         wait_condition=lambda vm: vm.status == otypes.VmStatus.UP,
                     )
+            # Allow migrate vm when state present.
+            if vm_existed:
+                vms_module._migrate_vm(vm)
             ret['changed'] = vms_module.changed
         elif state == 'stopped':
             if module.params['xen'] or module.params['kvm'] or module.params['vmware']:
@@ -2548,6 +2708,13 @@ def main():
                     directory=export_vm.get('directory'),
                     filename=export_vm.get('filename'),
                 )
+        elif state == 'reboot':
+            ret = vms_module.action(
+                action='reboot',
+                entity=vm,
+                action_condition=lambda vm: vm.status == otypes.VmStatus.UP,
+                wait_condition=lambda vm: vm.status == otypes.VmStatus.UP,
+            )
 
         module.exit_json(**ret)
     except Exception as e:

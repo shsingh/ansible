@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-# Copyright: (c) 2018, Andrey Klychkov (@Andersson007) <aaklychkov@mail.ru>
+# Copyright: (c) 2018-2019, Andrew Klychkov (@Andersson007) <aaklychkov@mail.ru>
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
@@ -19,8 +19,6 @@ module: postgresql_idx
 short_description: Create or drop indexes from a PostgreSQL database
 description:
 - Create or drop indexes from a PostgreSQL database.
-- For more information see U(https://www.postgresql.org/docs/current/sql-createindex.html),
-  U(https://www.postgresql.org/docs/current/sql-dropindex.html).
 version_added: '2.8'
 
 options:
@@ -51,8 +49,8 @@ options:
   state:
     description:
     - Index state.
-    - I(state=present) implies the index will be created if it does not exist.
-    - I(state=absent) implies the index will be dropped if it exists.
+    - C(present) implies the index will be created if it does not exist.
+    - C(absent) implies the index will be dropped if it exists.
     type: str
     default: present
     choices: [ absent, present ]
@@ -61,12 +59,12 @@ options:
     - Table to create index on it.
     - Mutually exclusive with I(state=absent).
     type: str
-    required: true
   columns:
     description:
     - List of index columns that need to be covered by index.
     - Mutually exclusive with I(state=absent).
     type: list
+    elements: str
     aliases:
     - column
   cond:
@@ -91,6 +89,13 @@ options:
     - Mutually exclusive with I(cascade=yes).
     type: bool
     default: yes
+  unique:
+    description:
+    - Enable unique index.
+    - Only btree currently supports unique indexes.
+    type: bool
+    default: no
+    version_added: '2.10'
   tablespace:
     description:
     - Set a tablespace for the index.
@@ -102,32 +107,39 @@ options:
     - Storage parameters like fillfactor, vacuum_cleanup_index_scale_factor, etc.
     - Mutually exclusive with I(state=absent).
     type: list
+    elements: str
   cascade:
     description:
     - Automatically drop objects that depend on the index,
-      and in turn all objects that depend on those objects U(https://www.postgresql.org/docs/current/sql-dropindex.html).
+      and in turn all objects that depend on those objects.
     - It used only with I(state=absent).
     - Mutually exclusive with I(concurrent=yes)
     type: bool
     default: no
 
+seealso:
+- module: postgresql_table
+- module: postgresql_tablespace
+- name: PostgreSQL indexes reference
+  description: General information about PostgreSQL indexes.
+  link: https://www.postgresql.org/docs/current/indexes.html
+- name: CREATE INDEX reference
+  description: Complete reference of the CREATE INDEX command documentation.
+  link: https://www.postgresql.org/docs/current/sql-createindex.html
+- name: ALTER INDEX reference
+  description: Complete reference of the ALTER INDEX command documentation.
+  link: https://www.postgresql.org/docs/current/sql-alterindex.html
+- name: DROP INDEX reference
+  description: Complete reference of the DROP INDEX command documentation.
+  link: https://www.postgresql.org/docs/current/sql-dropindex.html
+
 notes:
 - The index building process can affect database performance.
 - To avoid table locks on production databases, use I(concurrent=yes) (default behavior).
-- The default authentication assumes that you are either logging in as or
-  sudo'ing to the postgres account on the host.
-- This module uses psycopg2, a Python PostgreSQL database adapter. You must
-  ensure that psycopg2 is installed on the host before using this module.
-- If the remote host is the PostgreSQL server (which is the default case), then
-  PostgreSQL must also be installed on the remote host.
-- For Ubuntu-based systems, install the postgresql, libpq-dev, and python-psycopg2 packages
-  on the remote host before using this module.
-
-requirements:
-- psycopg2
 
 author:
 - Andrew Klychkov (@Andersson007)
+
 extends_documentation_fragment: postgres
 '''
 
@@ -189,6 +201,15 @@ EXAMPLES = r'''
     columns: id,comment
     idxname: test_idx
     cond: id > 1
+
+- name: Create unique btree index if not exists test_unique_idx on column name of table products
+  postgresql_idx:
+    db: acme
+    table: products
+    columns: name
+    name: test_unique_idx
+    unique: yes
+    concurrent: no
 '''
 
 RETURN = r'''
@@ -237,9 +258,12 @@ except ImportError:
     pass
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.database import SQLParseError
-from ansible.module_utils.postgres import connect_to_db, postgres_common_argument_spec
-from ansible.module_utils._text import to_native
+from ansible.module_utils.postgres import (
+    connect_to_db,
+    exec_sql,
+    get_conn_params,
+    postgres_common_argument_spec,
+)
 
 
 VALID_IDX_TYPES = ('BTREE', 'HASH', 'GIST', 'SPGIST', 'GIN', 'BRIN')
@@ -250,6 +274,31 @@ VALID_IDX_TYPES = ('BTREE', 'HASH', 'GIST', 'SPGIST', 'GIN', 'BRIN')
 #
 
 class Index(object):
+
+    """Class for working with PostgreSQL indexes.
+
+    TODO:
+        1. Add possibility to change ownership
+        2. Add possibility to change tablespace
+        3. Add list called executed_queries (executed_query should be left too)
+        4. Use self.module instead of passing arguments to the methods whenever possible
+
+    Args:
+        module (AnsibleModule) -- object of AnsibleModule class
+        cursor (cursor) -- cursor object of psycopg2 library
+        schema (str) -- name of the index schema
+        name (str) -- name of the index
+
+    Attrs:
+        module (AnsibleModule) -- object of AnsibleModule class
+        cursor (cursor) -- cursor object of psycopg2 library
+        schema (str) -- name of the index schema
+        name (str) -- name of the index
+        exists (bool) -- flag the index exists in the DB or not
+        info (dict) -- dict that contents information about the index
+        executed_query (str) -- executed query
+    """
+
     def __init__(self, module, cursor, schema, name):
         self.name = name
         if schema:
@@ -272,15 +321,17 @@ class Index(object):
         self.executed_query = ''
 
     def get_info(self):
-        """
-        Getter to refresh and return table info
+        """Refresh index info.
+
+        Return self.info dict.
         """
         self.__exists_in_db()
         return self.info
 
     def __exists_in_db(self):
-        """
-        Check index and collect info
+        """Check index existence, collect info, add it to self.info dict.
+
+        Return True if the index exists, otherwise, return False.
         """
         query = ("SELECT i.schemaname, i.tablename, i.tablespace, "
                  "pi.indisvalid, c.reloptions "
@@ -289,9 +340,9 @@ class Index(object):
                  "ON i.indexname = c.relname "
                  "JOIN pg_catalog.pg_index AS pi "
                  "ON c.oid = pi.indexrelid "
-                 "WHERE i.indexname = '%s'" % self.name)
+                 "WHERE i.indexname = %(name)s")
 
-        res = self.__exec_sql(query)
+        res = exec_sql(self, query, query_params={'name': self.name}, add_to_executed=False)
         if res:
             self.exists = True
             self.info = dict(
@@ -309,21 +360,33 @@ class Index(object):
             self.exists = False
             return False
 
-    def create(self, tblname, idxtype, columns, cond, tblspace, storage_params, concurrent=True):
-        """
-        Create PostgreSQL index.
-        """
-        # To change existing index we should write
-        # 'postgresql_alter_table' standalone module.
+    def create(self, tblname, idxtype, columns, cond, tblspace, storage_params, concurrent=True, unique=False):
+        """Create PostgreSQL index.
 
+        Return True if success, otherwise, return False.
+
+        Args:
+            tblname (str) -- name of a table for the index
+            idxtype (str) -- type of the index like BTREE, BRIN, etc
+            columns (str) -- string of comma-separated columns that need to be covered by index
+            tblspace (str) -- tablespace for storing the index
+            storage_params (str) -- string of comma-separated storage parameters
+
+        Kwargs:
+            concurrent (bool) -- build index in concurrent mode, default True
+        """
         if self.exists:
             return False
 
-        changed = False
         if idxtype is None:
             idxtype = "BTREE"
 
-        query = 'CREATE INDEX'
+        query = 'CREATE'
+
+        if unique:
+            query += ' UNIQUE'
+
+        query += ' INDEX'
 
         if concurrent:
             query += ' CONCURRENTLY'
@@ -348,17 +411,24 @@ class Index(object):
 
         self.executed_query = query
 
-        if self.__exec_sql(query, ddl=True):
+        if exec_sql(self, query, ddl=True, add_to_executed=False):
             return True
 
         return False
 
     def drop(self, schema, cascade=False, concurrent=True):
-        """
-        Drop PostgreSQL index.
-        """
+        """Drop PostgreSQL index.
 
-        changed = False
+        Return True if success, otherwise, return False.
+
+        Args:
+            schema (str) -- name of the index schema
+
+        Kwargs:
+            cascade (bool) -- automatically drop objects that depend on the index,
+                default False
+            concurrent (bool) -- build index in concurrent mode, default True
+        """
         if not self.exists:
             return False
 
@@ -377,22 +447,8 @@ class Index(object):
 
         self.executed_query = query
 
-        if self.__exec_sql(query, ddl=True):
+        if exec_sql(self, query, ddl=True, add_to_executed=False):
             return True
-
-        return False
-
-    def __exec_sql(self, query, ddl=False):
-        try:
-            self.cursor.execute(query)
-            if not ddl:
-                res = self.cursor.fetchall()
-                return res
-            return True
-        except SQLParseError as e:
-            self.module.fail_json(msg=to_native(e))
-        except Exception as e:
-            self.module.fail_json(msg="Cannot execute SQL '%s': %s" % (query, to_native(e)))
 
         return False
 
@@ -409,13 +465,14 @@ def main():
         db=dict(type='str', aliases=['login_db']),
         state=dict(type='str', default='present', choices=['absent', 'present']),
         concurrent=dict(type='bool', default=True),
+        unique=dict(type='bool', default=False),
         table=dict(type='str'),
         idxtype=dict(type='str', aliases=['type']),
-        columns=dict(type='list', aliases=['column']),
+        columns=dict(type='list', elements='str', aliases=['column']),
         cond=dict(type='str'),
         session_role=dict(type='str'),
         tablespace=dict(type='str'),
-        storage_params=dict(type='list'),
+        storage_params=dict(type='list', elements='str'),
         cascade=dict(type='bool', default=False),
         schema=dict(type='str'),
     )
@@ -427,6 +484,7 @@ def main():
     idxname = module.params["idxname"]
     state = module.params["state"]
     concurrent = module.params["concurrent"]
+    unique = module.params["unique"]
     table = module.params["table"]
     idxtype = module.params["idxtype"]
     columns = module.params["columns"]
@@ -437,7 +495,10 @@ def main():
     schema = module.params["schema"]
 
     if concurrent and cascade:
-        module.fail_json(msg="Cuncurrent mode and cascade parameters are mutually exclusive")
+        module.fail_json(msg="Concurrent mode and cascade parameters are mutually exclusive")
+
+    if unique and (idxtype and idxtype != 'btree'):
+        module.fail_json(msg="Only btree currently supports unique indexes")
 
     if state == 'present':
         if not table:
@@ -453,7 +514,8 @@ def main():
     if cascade and state != 'absent':
         module.fail_json(msg="cascade parameter used only with state=absent")
 
-    db_connection = connect_to_db(module, autocommit=True)
+    conn_params = get_conn_params(module, module.params)
+    db_connection = connect_to_db(module, conn_params, autocommit=True)
     cursor = db_connection.cursor(cursor_factory=DictCursor)
 
     # Set defaults:
@@ -494,7 +556,7 @@ def main():
         if storage_params:
             storage_params = ','.join(storage_params)
 
-        changed = index.create(table, idxtype, columns, cond, tablespace, storage_params, concurrent)
+        changed = index.create(table, idxtype, columns, cond, tablespace, storage_params, concurrent, unique)
 
         if changed:
             kw = index.get_info()

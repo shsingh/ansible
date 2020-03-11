@@ -7,4 +7,8 @@ shippable/posix/group2
 >>>>>>> bd072fe83a932598d5d86f9548d8f2ba0ec07371
 =======
 needs/target/template
+<<<<<<< HEAD
 >>>>>>> eff1f8851c795cb09f504f564587b892a502ad76
+=======
+skip/aix
+>>>>>>> 4e8b240b8b74db2453851f12ec82c7f782289187

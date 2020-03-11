@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 """Prevent unwanted files from being added to the source tree."""
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
+
 import os
 import sys
 
@@ -15,19 +18,16 @@ def main():
         '.py',
     )
 
-    skip = (
-        # allowed special cases
-        'lib/ansible/config/base.yml',
-        'lib/ansible/config/module_defaults.yml',
-    )
+    skip_paths = set([
+        'lib/ansible/config/routing.yml',  # not included in the sanity ignore file since it won't exist until after migration
+    ])
 
     skip_directories = (
-        'lib/ansible.egg-info/',
         'lib/ansible/galaxy/data/',
     )
 
     for path in paths:
-        if path in skip:
+        if path in skip_paths:
             continue
 
         if any(path.startswith(skip_directory) for skip_directory in skip_directories):

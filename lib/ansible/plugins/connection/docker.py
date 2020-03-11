@@ -76,6 +76,10 @@ class Connection(ConnectionBase):
         # configured to be connected to by root and they are not running as
         # root.
 
+        # Windows uses Powershell modules
+        if getattr(self._shell, "_IS_WINDOWS", False):
+            self.module_implementation_preferences = ('.ps1', '.exe', '')
+
         if 'docker_command' in kwargs:
             self.docker_cmd = kwargs['docker_command']
         else:
@@ -84,7 +88,9 @@ class Connection(ConnectionBase):
                 raise AnsibleError("docker command not found in PATH")
 
         docker_version = self._get_docker_version()
-        if LooseVersion(docker_version) < LooseVersion(u'1.3'):
+        if docker_version == u'dev':
+            display.warning(u'Docker version number is "dev". Will assume latest version.')
+        if docker_version != u'dev' and LooseVersion(docker_version) < LooseVersion(u'1.3'):
             raise AnsibleError('docker connection type requires docker 1.3 or higher')
 
         # The remote user we will request from docker (if supported)
@@ -93,7 +99,7 @@ class Connection(ConnectionBase):
         self.actual_user = None
 
         if self._play_context.remote_user is not None:
-            if LooseVersion(docker_version) >= LooseVersion(u'1.7'):
+            if docker_version == u'dev' or LooseVersion(docker_version) >= LooseVersion(u'1.7'):
                 # Support for specifying the exec user was added in docker 1.7
                 self.remote_user = self._play_context.remote_user
                 self.actual_user = self.remote_user
@@ -247,7 +253,8 @@ class Connection(ConnectionBase):
                 selector.close()
 
             if not self.become.check_success(become_output):
-                p.stdin.write(to_bytes(self._play_context.become_pass, errors='surrogate_or_strict') + b'\n')
+                become_pass = self.become.get_option('become_pass', playcontext=self._play_context)
+                p.stdin.write(to_bytes(become_pass, errors='surrogate_or_strict') + b'\n')
             fcntl.fcntl(p.stdout, fcntl.F_SETFL, fcntl.fcntl(p.stdout, fcntl.F_GETFL) & ~os.O_NONBLOCK)
             fcntl.fcntl(p.stderr, fcntl.F_SETFL, fcntl.fcntl(p.stderr, fcntl.F_GETFL) & ~os.O_NONBLOCK)
 

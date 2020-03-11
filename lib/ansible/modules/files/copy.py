@@ -36,7 +36,8 @@ options:
   content:
     description:
     - When used instead of C(src), sets the contents of a file directly to the specified value.
-    - For advanced formatting or if C(content) contains a variable, use the C(template) module.
+    - Works only when C(dest) is a file. Creates the file if it does not exist.
+    - For advanced formatting or if C(content) contains a variable, use the M(template) module.
     type: str
     version_added: '1.1'
   dest:
@@ -59,6 +60,7 @@ options:
     - Influence whether the remote file must always be replaced.
     - If C(yes), the remote file will be replaced when contents are different than the source.
     - If C(no), the file will only be transferred if the destination does not exist.
+    - Alias C(thirsty) has been deprecated and will be removed in 2.13.
     type: bool
     default: yes
     aliases: [ thirsty ]
@@ -154,7 +156,7 @@ EXAMPLES = r'''
     group: foo
     mode: u+rw,g-wx,o-rwx
 
-- name: Copy a new "ntp.conf file into place, backing up the original if it differs from the copied version
+- name: Copy a new "ntp.conf" file into place, backing up the original if it differs from the copied version
   copy:
     src: /mine/ntp.conf
     dest: /etc/ntp.conf
@@ -167,14 +169,14 @@ EXAMPLES = r'''
   copy:
     src: /mine/sudoers
     dest: /etc/sudoers
-    validate: /usr/sbin/visudo -cf %s
+    validate: /usr/sbin/visudo -csf %s
 
 - name: Copy a "sudoers" file on the remote machine for editing
   copy:
     src: /etc/sudoers
     dest: /etc/sudoers.edit
     remote_src: yes
-    validate: /usr/sbin/visudo -cf %s
+    validate: /usr/sbin/visudo -csf %s
 
 - name: Copy using inline content
   copy:
@@ -289,7 +291,7 @@ class AnsibleModuleError(Exception):
 # basic::AnsibleModule() until then but if so, make it a private function so that we don't have to
 # keep it for backwards compatibility later.
 def clear_facls(path):
-    setfacl = get_bin_path('setfacl', True)
+    setfacl = get_bin_path('setfacl')
     # FIXME "setfacl -b" is available on Linux and FreeBSD. There is "setfacl -D e" on z/OS. Others?
     acl_command = [setfacl, '-b', path]
     b_acl_command = [to_bytes(x) for x in acl_command]
@@ -483,6 +485,9 @@ def copy_common_dirs(src, dest, module):
         left_only_changed = copy_left_only(b_src_item_path, b_dest_item_path, module)
         if diff_files_changed or left_only_changed:
             changed = True
+
+        # recurse into subdirectory
+        changed = changed or copy_common_dirs(os.path.join(src, item), os.path.join(dest, item), module)
     return changed
 
 
@@ -504,10 +509,14 @@ def main():
             remote_src=dict(type='bool'),
             local_follow=dict(type='bool'),
             checksum=dict(type='str'),
+            follow=dict(type='bool', default=False),
         ),
         add_file_common_args=True,
         supports_check_mode=True,
     )
+
+    if module.params.get('thirsty'):
+        module.deprecate('The alias "thirsty" has been deprecated and will be removed, use "force" instead', version='2.13')
 
     src = module.params['src']
     b_src = to_bytes(src, errors='surrogate_or_strict')
@@ -565,8 +574,9 @@ def main():
         )
 
     # Special handling for recursive copy - create intermediate dirs
-    if _original_basename and dest.endswith(os.sep):
-        dest = os.path.join(dest, _original_basename)
+    if dest.endswith(os.sep):
+        if _original_basename:
+            dest = os.path.join(dest, _original_basename)
         b_dest = to_bytes(dest, errors='surrogate_or_strict')
         dirname = os.path.dirname(dest)
         b_dirname = to_bytes(dirname, errors='surrogate_or_strict')
@@ -770,9 +780,8 @@ def main():
     if backup_file:
         res_args['backup_file'] = backup_file
 
-    module.params['dest'] = dest
     if not module.check_mode:
-        file_args = module.load_file_common_arguments(module.params)
+        file_args = module.load_file_common_arguments(module.params, path=dest)
         res_args['changed'] = module.set_fs_attributes_if_different(file_args, res_args['changed'])
 
     module.exit_json(**res_args)

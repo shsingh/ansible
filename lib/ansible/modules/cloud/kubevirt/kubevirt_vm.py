@@ -52,7 +52,7 @@ options:
         type: str
     ephemeral:
         description:
-            - If (true) ephemeral vitual machine will be created. When destroyed it won't be accessible again.
+            - If (true) ephemeral virtual machine will be created. When destroyed it won't be accessible again.
             - Works only with C(state) I(present) and I(absent).
         type: bool
         default: false
@@ -194,8 +194,17 @@ EXAMPLES = '''
               path: /disk/fedora.qcow2
           disk:
             bus: virtio
+      node_affinity:
+        soft:
+          - weight: 1
+            term:
+              match_expressions:
+                - key: security
+                  operator: In
+                  values:
+                    - S2
 
-- name: Create virtual machine with datavolume
+- name: Create virtual machine with datavolume and specify node affinity
   kubevirt_vm:
     name: myvm
     namespace: default
@@ -209,6 +218,14 @@ EXAMPLES = '''
           accessModes:
             - ReadWriteOnce
           storage: 5Gi
+    node_affinity:
+      hard:
+        - term:
+            match_expressions:
+              - key: security
+                operator: In
+                values:
+                  - S1
 
 - name: Remove virtual machine 'myvm'
   kubevirt_vm:
@@ -251,7 +268,7 @@ VM_ARG_SPEC = {
     },
     'datavolumes': {'type': 'list'},
     'template': {'type': 'str'},
-    'template_parameters': {'type': 'dict', 'default': {}},
+    'template_parameters': {'type': 'dict'},
 }
 
 # Which params (can) modify 'spec:' contents of a VM:
@@ -380,7 +397,7 @@ class KubeVirtVM(KubeVirtRawModule):
         template['metadata']['labels']['vm.cnv.io/name'] = self.params.get('name')
         dummy, definition = self.construct_vm_definition(kind, definition, template, defaults)
 
-        return dict(self.merge_dicts(definition, processedtemplate))
+        return self.merge_dicts(definition, processedtemplate)
 
     def execute_module(self):
         # Parse parameters specific to this module:
@@ -405,16 +422,18 @@ class KubeVirtVM(KubeVirtRawModule):
             if our_state != 'absent':
                 self.params['state'] = k8s_state = 'present'
 
+        # Start with fetching the current object to make sure it exists
+        # If it does, but we end up not performing any operations on it, at least we'll be able to return
+        # its current contents as part of the final json
         self.client = self.get_api_client()
         self._kind_resource = self.find_supported_resource(kind)
         k8s_obj = self.get_resource(self._kind_resource)
         if not self.check_mode and not vm_spec_change and k8s_state != 'absent' and not k8s_obj:
             self.fail("It's impossible to create an empty VM or change state of a non-existent VM.")
 
-        # Changes in VM's spec or any changes to VMIs warrant a full CRUD, the latter because
-        # VMIs don't really have states to manage; they're either present or don't exist
+        # If there are (potential) changes to `spec:` or we want to delete the object, that warrants a full CRUD
         # Also check_mode always warrants a CRUD, as that'll produce a sane result
-        if vm_spec_change or ephemeral or k8s_state == 'absent' or self.check_mode:
+        if vm_spec_change or k8s_state == 'absent' or self.check_mode:
             definition = self.construct_definition(kind, our_state, ephemeral)
             result = self.execute_crud(kind, definition)
             changed = result['changed']
